@@ -4,13 +4,13 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
+import org.bukkit.block.data.Ageable;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockGrowEvent;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.material.CocoaPlant;
-import org.bukkit.material.MaterialData;
 import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.Main;
 import xyz.geik.farmer.api.managers.FarmerManager;
@@ -163,13 +163,12 @@ public class AutoHarvestEvent implements Listener {
      * @return status of block harvestable
      */
     private boolean isCropsHarvestable(@NotNull XMaterial material) {
-        boolean status = material.equals(XMaterial.valueOf("WHEAT"))
+        return material.equals(XMaterial.valueOf("WHEAT"))
                 || material.equals(XMaterial.valueOf("CARROT"))
                 || material.equals(XMaterial.valueOf("POTATO"))
                 || material.equals(XMaterial.valueOf("BEETROOT"))
                 || material.equals(XMaterial.valueOf("SWEET_BERRIES"))
                 || material.equals(XMaterial.valueOf("NETHER_WART"));
-        return status;
     }
 
     /**
@@ -194,26 +193,37 @@ public class AutoHarvestEvent implements Listener {
      */
     private boolean harvestCrops(@NotNull BlockState state, @NotNull XMaterial material) {
         if (isCropsHarvestable(material)) {
-            MaterialData data = state.getData();
-            // Other crops
-            if (data.getData() == 7
-                    || ((material.equals(XMaterial.valueOf("NETHER_WART"))
+            BlockData data = state.getBlockData();
+
+            if (data instanceof Ageable) {
+                Ageable ageable = (Ageable) data;
+                int maxAge = ageable.getMaximumAge();
+
+                // Other crops
+                if (ageable.getAge() == maxAge
+                        || ((material.equals(XMaterial.valueOf("NETHER_WART"))
                         || material.equals(XMaterial.valueOf("BEETROOT"))
                         || material.equals(XMaterial.valueOf("SWEET_BERRIES")))
-                            && data.getData() == 3)) {
-                ItemStack item = material.parseItem();
-                // Checks if stock is not full then drops item
-                // item of crop
-                state.getWorld().dropItemNaturally(state.getLocation(), item);
-                // Item of seed
-                state.getBlock().getDrops().forEach(seed -> state.getWorld().dropItemNaturally(state.getLocation(), seed));
-                // Makes crop to be zero age
-                data.setData((byte) 0);
-                state.setData(data);
+                        && ageable.getAge() == 3)) {
+
+                    ItemStack item = material.parseItem();
+                    // Checks if stock is not full then drops item
+                    // item of crop
+                    if (item != null) {
+                        state.getWorld().dropItemNaturally(state.getLocation(), item);
+                    }
+                    // Item of seed
+                    state.getBlock().getDrops().forEach(seed -> state.getWorld().dropItemNaturally(state.getLocation(), seed));
+
+                    // Makes crop to be zero age
+                    ageable.setAge(0);
+                    state.setBlockData(ageable);
+                    state.update(true);
+                }
+                return true;
             }
-            return true;
         }
-        else return false;
+        return false;
     }
 
     /**
@@ -240,18 +250,28 @@ public class AutoHarvestEvent implements Listener {
      * @param state of block
      * @param material of block
      */
-    private boolean harvestCocoa(BlockState state, @NotNull XMaterial material) {
+    private boolean harvestCocoa(@NotNull BlockState state, @NotNull XMaterial material) {
         if (material.equals(XMaterial.valueOf("COCOA_BEANS"))) {
-            CocoaPlant data = (CocoaPlant) state.getData();
-            if (data.getSize().equals(CocoaPlant.CocoaPlantSize.LARGE)) {
-                ItemStack item = material.parseItem();
-                item.setAmount(3);
-                state.getWorld().dropItemNaturally(state.getLocation(), item);
+            BlockData data = state.getBlockData();
 
-                data.setSize(CocoaPlant.CocoaPlantSize.SMALL);
-                state.setRawData(data.getData());
+            if (data instanceof Ageable) {
+                Ageable ageable = (Ageable) data;
+                int maxAge = ageable.getMaximumAge();
+
+                if (ageable.getAge() == maxAge) {
+                    ItemStack item = material.parseItem();
+                    if (item != null) {
+                        item.setAmount(3);
+                        state.getWorld().dropItemNaturally(state.getLocation(), item);
+                    }
+
+                    // Reset cocoa to the smallest growth age
+                    ageable.setAge(0);
+                    state.setBlockData(ageable);
+                    state.update(true);
+                }
+                return true;
             }
-            return true;
         }
         return false;
     }
@@ -278,9 +298,6 @@ public class AutoHarvestEvent implements Listener {
                 return true;
         }
         Location loc = location.clone().add(0, 1, 0);
-        if (loc.getBlock().getType().name().contains("PISTON"))
-            return true;
-        else
-            return false;
+        return loc.getBlock().getType().name().contains("PISTON");
     }
 }
