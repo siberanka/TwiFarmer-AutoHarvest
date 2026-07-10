@@ -1,7 +1,5 @@
 package xyz.geik.farmer.modules.autoharvest.configuration;
 
-import lombok.Getter;
-import lombok.Setter;
 import xyz.geik.glib.shades.okaeri.configs.OkaeriConfig;
 import xyz.geik.glib.shades.okaeri.configs.annotation.Comment;
 import xyz.geik.glib.shades.okaeri.configs.annotation.NameStrategy;
@@ -14,10 +12,10 @@ import java.util.List;
  * Modules file
  *
  * @author geik
+ * @author siberanka
  * @since 2.0
  */
-@Getter
-@Setter
+@SuppressWarnings("deprecation")
 @Names(strategy = NameStrategy.IDENTITY)
 public class ConfigFile extends OkaeriConfig {
 
@@ -56,7 +54,71 @@ public class ConfigFile extends OkaeriConfig {
             "*IMPORTANT* Write only base item of crops. for example, if you want to harvest wheat, you must write WHEAT here",
             "if you want to harvest all crops, you must write all items here (*if you remove this setting, it can cause errors*)",
             "also you must write the crop names same as items.yml items.",
-            "Available harvests: WHEAT, CARROT, POTATO, PUMPKIN, MELON, BEETROOT, NETHER_WART, SUGAR_CANE, COCOA_BEANS"})
+            "Available harvests: WHEAT, CARROT, POTATO, PUMPKIN, MELON, BEETROOT, NETHER_WART, SUGAR_CANE, COCOA_BEANS, SWEET_BERRIES, CACTUS, CHORUS_FLOWER, CHORUS_PLANT"})
     private List<String> items = Arrays.asList("WHEAT", "CARROT", "POTATO", "PUMPKIN");
+
+    public boolean isStatus() {
+        return status;
+    }
+
+    public void setStatus(boolean status) {
+        this.status = status;
+    }
+
+    public boolean isRequirePiston() {
+        return requirePiston;
+    }
+
+    public void setRequirePiston(boolean requirePiston) {
+        this.requirePiston = requirePiston;
+    }
+
+    public boolean isCheckAllDirections() {
+        return checkAllDirections;
+    }
+
+    public void setCheckAllDirections(boolean checkAllDirections) {
+        this.checkAllDirections = checkAllDirections;
+    }
+
+    public boolean isWithoutFarmer() {
+        return withoutFarmer;
+    }
+
+    public void setWithoutFarmer(boolean withoutFarmer) {
+        this.withoutFarmer = withoutFarmer;
+    }
+
+    public boolean isCheckStock() {
+        return checkStock;
+    }
+
+    public void setCheckStock(boolean checkStock) {
+        this.checkStock = checkStock;
+    }
+
+    public boolean isDefaultStatus() {
+        return defaultStatus;
+    }
+
+    public void setDefaultStatus(boolean defaultStatus) {
+        this.defaultStatus = defaultStatus;
+    }
+
+    public String getCustomPerm() {
+        return customPerm;
+    }
+
+    public void setCustomPerm(String customPerm) {
+        this.customPerm = customPerm;
+    }
+
+    public List<String> getItems() {
+        return items;
+    }
+
+    public void setItems(List<String> items) {
+        this.items = items;
+    }
 
 }

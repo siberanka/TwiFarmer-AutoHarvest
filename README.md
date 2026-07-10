@@ -1,66 +1,61 @@
 # Farmer AutoHarvest Module
 
-Automatically harvests mature crops for your Farmer regions, with flexible piston requirements, stock handling, and performance tuning.
+Automatically harvests mature crops inside Farmer regions and immediately replants ageable crops. The module is built for Paper-compatible servers and uses Paper's region scheduler for Paper, Folia, and Leaf.
 
----
+## Compatibility
 
-## 📦 Installation
+| Minecraft | Java | Server | Farmer |
+| --- | --- | --- | --- |
+| 1.21.x | 21 | Paper, Folia, Leaf | v6-b113 or newer |
+| 26.x | 25 | Paper, Folia, Leaf | v6-b113 or newer |
 
-1. Place the `AutoHarvest` folder into `plugins/Farmer/modules/`.  
-2. Restart your server.  
-3. A `config.yml` and matching language file will be created under `plugins/Farmer/modules/AutoHarvest/`.
+Plain Bukkit and Spigot servers are intentionally unsupported. This project is an external Farmer module rather than a standalone `JavaPlugin`, so Folia capability metadata is supplied by the Farmer host plugin. Farmer v6-b113 declares Folia support and the module performs block work through Paper's `RegionScheduler`.
 
----
+## Installation
 
-## ⚙️ Features
+1. Install Farmer v6-b113 or newer on a compatible Paper, Folia, or Leaf server.
+2. Place `Farmer-AutoHarvest-1.1.0.jar` in `plugins/Farmer/modules/`.
+3. Restart the server.
+4. Enable the module in `plugins/Farmer/modules/autoharvest/config.yml`.
 
-- **Automatic Crop Harvesting**  
-  Detects when configured crops reach maturity and harvests them for the farm owner.
+The module refuses to enable when Paper's region scheduler API is unavailable.
 
-- **Optional Piston Requirement**  
-  Only harvest when a piston is placed above (or in any direction) of the crop, reducing accidental pickups.
+## Behavior
 
-- **Stock-Aware Growth**  
-  Prevent drops when your inventory is full, or allow crops to drop on the ground instead.
+- Mature crop handling is delayed by one region tick so the final `BlockGrowEvent` state is applied first.
+- The delayed operation revalidates the world, crop type, maturity, piston requirement, Farmer ownership, module state, and stock state.
+- Ageable crops are reset to age zero after their real mature-block drops are captured.
+- Fruit and vertical-growth blocks are removed only after their real drops are captured.
+- A stale or duplicate scheduled operation cannot harvest a crop that is no longer mature.
+- Farmer inventory access triggered by this module is serialized per Farmer object for Folia regions.
 
-- **Farmer-Linked or Standalone**  
-  Operates within a Farmer region or globally if no Farmer is present.
+## Configuration
 
-- **Performance Controls**  
-  Toggle per-crop piston checks and multi-direction scans to balance performance on large farms.
+The generated `config.yml` documents every setting:
 
----
+- `status`: enables the module.
+- `requirePiston`: requires a piston near the crop.
+- `checkAllDirections`: checks horizontal sides in addition to the block above.
+- `withoutFarmer`: allows harvesting outside Farmer-backed regions.
+- `checkStock`: prevents harvesting when the relevant Farmer stock is full.
+- `defaultStatus`: initial AutoHarvest state for a Farmer.
+- `customPerm`: permission required for the GUI toggle.
+- `items`: base item names to harvest. Invalid names are rejected once during configuration loading.
 
-## 🔧 Configuration
+## Building
 
-All options are documented inline in `config.yml`. Key settings include:
+The release JAR targets Java 21 bytecode so the same artifact runs on 1.21.x and 26.x:
 
-- **status**  
-  Enable or disable automatic harvesting.
+```bash
+mvn clean verify -Ppaper-1.21
+```
 
-- **requirePiston** & **checkAllDirections**  
-  Define whether a piston must be present (and in which directions) for harvest to occur.
+Compile against the 26.x Paper API with JDK 25:
 
-- **withoutFarmer**  
-  Allow harvesting even if no Farmer region is active.
+```bash
+mvn clean verify -Ppaper-26
+```
 
-- **checkStock**  
-  Prevent harvesting when stock is full, or allow ground drops.
+## Authors
 
-- **defaultStatus**  
-  Default enabled state for new farms.
-
-- **items**  
-  List of crop types (by base item name) to harvest.
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository.  
-2. Add your improvements or fixes.  
-3. Open a pull request against `develop`.  
-
-Please follow existing code style and update documentation as needed.
-
----
+Geik, Poyraz, and siberanka.

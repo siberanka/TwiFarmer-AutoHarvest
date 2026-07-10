@@ -1,11 +1,10 @@
 package xyz.geik.farmer.modules.autoharvest.handlers;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
-import org.bukkit.block.data.Ageable;
-import org.bukkit.block.data.BlockData;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -21,283 +20,176 @@ import xyz.geik.farmer.model.inventory.FarmerItem;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+
 /**
- * Auto Harvest Listener class
+ * Detects mature crops and performs an idempotent harvest on the owning region.
  *
  * @author poyraz
+ * @author siberanka
  * @since 1.0.0
  */
 public class AutoHarvestEvent implements Listener {
 
-    /**
-     * Constructor of class
-     */
-    public AutoHarvestEvent() {}
+    private final AtomicBoolean lookupFailureLogged = new AtomicBoolean();
+    private final AtomicBoolean harvestFailureLogged = new AtomicBoolean();
 
     /**
-     * Main event of auto harvest
+     * Defers harvesting by one region tick. At MONITOR priority the event's final
+     * cancellation state is known, and the delayed task sees the applied growth.
      *
-     * @param event of block grow
+     * @param event block growth event
      */
-    @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGHEST)
+    @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onHarvestGrowEvent(@NotNull BlockGrowEvent event) {
-        Block block = event.getNewState().getBlock();
-        XMaterial material = parseMaterial(XMaterial.matchXMaterial(event.getNewState().getType()));
-        // Checks world suitable for farmer
-        if (!WorldHelper.isFarmerAllowed(block.getWorld().getName()))
+        AutoHarvest module = AutoHarvest.getInstance();
+        if (module == null) {
             return;
+        }
 
-        // Checks auto harvest, harvests this block.
-        if (!AutoHarvest.checkCrop(material))
+        BlockState newState = event.getNewState();
+        XMaterial material = CropHarvesting.normalize(XMaterial.matchXMaterial(newState.getType()));
+        if (!AutoHarvest.checkCrop(material)
+                || !CropHarvesting.isHarvestableGrowth(newState.getBlockData(), material)
+                || !WorldHelper.isFarmerAllowed(newState.getWorld().getName())) {
             return;
+        }
 
-        if (!AutoHarvest.getInstance().isWithoutFarmer()) {
-            // Checks item dropped in region of a player
-            // And checks region owner has a farmer
-            try {
-                String regionID = Main.getIntegration().getRegionID(block.getLocation());
-                if (regionID == null || !FarmerManager.getFarmers().containsKey(regionID))
-                    return;
+        Location location = newState.getLocation();
+        long generation = module.getLifecycleGeneration();
+        Bukkit.getRegionScheduler().runDelayed(Main.getInstance(), location, scheduledTask ->
+                harvestIfEligible(location, material, generation), 1L);
+    }
 
-                Farmer farmer = FarmerManager.getFarmers().get(regionID);
+    private void harvestIfEligible(@NotNull Location location, @NotNull XMaterial material, long generation) {
+        AutoHarvest module = AutoHarvest.getInstance();
+        if (module == null || !module.isActiveGeneration(generation)) {
+            return;
+        }
 
-                // Checks farmer can auto harvest
-                if (!farmer.getAttributeStatus("autoharvest"))
-                    return;
+        try {
+            Block block = location.getBlock();
+            if (!WorldHelper.isFarmerAllowed(block.getWorld().getName())
+                    || !AutoHarvest.checkCrop(material)
+                    || !CropHarvesting.isStillHarvestable(block, material)
+                    || (module.isRequirePiston() && !pistonCheck(block, module.isCheckAllDirections()))) {
+                return;
+            }
 
-                if (!hasStock(farmer, material)) {
-                    event.setCancelled(true);
+            if (module.isWithoutFarmer()) {
+                harvest(block, material);
+                return;
+            }
+
+            Farmer farmer = findFarmer(location);
+            if (farmer == null) {
+                return;
+            }
+
+            // A Farmer region can span multiple Folia regions. Serializing this
+            // module's stock/drop path prevents concurrent inventory mutations.
+            synchronized (farmer) {
+                if (!isCurrentFarmer(location, farmer)
+                        || !farmer.getAttributeStatus("autoharvest")
+                        || !hasStock(farmer, material)) {
                     return;
                 }
-            }
-            catch (Exception ignored) {}
-        }
-
-        // Checks piston
-        if (AutoHarvest.getInstance().isRequirePiston()) {
-            if (!pistonCheck(event.getBlock().getLocation()))
-                return;
-        }
-
-        // Harvests crops
-        if (harvestCrops(event.getNewState(), material))
-            return;
-
-        else if (harvestCocoa(event.getNewState(), material))
-            return;
-
-        else if (harvestBlocks(event.getNewState(), material, event))
-            return;
-
-        else return;
-    }
-
-    /**
-     * Checks if block harvestable or not.
-     *
-     * @param farmer of region
-     * @param material of farmer
-     * @return status of has stock
-     */
-    private boolean hasStock(Farmer farmer, XMaterial material) {
-        if (AutoHarvest.getInstance().isCheckStock()) {
-            // Checks if farmer has autoseller module and is enabled for this farmer
-            if (farmer.getAttributeStatus("autoseller"))
-                return true;
-            long capacity = farmer.getInv().getCapacity();
-            FarmerItem item = farmer.getInv()
-                    .getStockedItem(material);
-            if (item.getAmount() == capacity)
-                return false;
-
-            // Seed stock check
-            XMaterial seed = hasSeed(material);
-            if (!seed.equals(XMaterial.AIR)) {
-                if (FarmerInv.checkMaterial(seed.parseItem()))
-                    return hasStock(farmer, seed);
+                harvest(block, material);
             }
         }
-        return true;
+        catch (RuntimeException exception) {
+            if (harvestFailureLogged.compareAndSet(false, true)) {
+                Main.getInstance().getLogger().log(Level.WARNING,
+                        "AutoHarvest rejected a crop operation after an unexpected runtime error.", exception);
+            }
+        }
     }
 
-    /**
-     * Harvest block typed crops which remove after harvest
-     *
-     * @param state of block
-     * @param material of block
-     * @return of harvest
-     */
-    private boolean harvestBlocks(BlockState state, @NotNull XMaterial material, BlockGrowEvent event) {
-        if (isBlockHarvestable(material)) {
-            event.setCancelled(true);
-            ItemStack item = material.parseItem();
-            assert item != null;
-            if (material.equals(XMaterial.valueOf("MELON_SLICE")))
-                item.setAmount(4);
-            else if (material.equals(XMaterial.valueOf("SWEET_BERRIES")))
-                item.setAmount(3);
-            state.getWorld().dropItemNaturally(state.getLocation(), item);
-            state.setType(Material.AIR);
+    private void harvest(@NotNull Block block, @NotNull XMaterial material) {
+        List<ItemStack> drops = CropHarvesting.snapshotDrops(block);
+        if (drops.isEmpty()) {
+            ItemStack fallback = material.parseItem();
+            if (fallback != null) {
+                drops.add(fallback);
+            }
+        }
+        CropHarvesting.harvest(block, material, drops);
+    }
+
+    private Farmer findFarmer(@NotNull Location location) {
+        try {
+            String regionId = Main.getIntegration().getRegionID(location);
+            return regionId == null ? null : FarmerManager.getFarmers().get(regionId);
+        }
+        catch (RuntimeException exception) {
+            if (lookupFailureLogged.compareAndSet(false, true)) {
+                Main.getInstance().getLogger().log(Level.WARNING,
+                        "AutoHarvest could not resolve the Farmer region; harvesting was denied.", exception);
+            }
+            return null;
+        }
+    }
+
+    private boolean isCurrentFarmer(@NotNull Location location, @NotNull Farmer expected) {
+        return findFarmer(location) == expected;
+    }
+
+    private boolean hasStock(@NotNull Farmer farmer, @NotNull XMaterial material) {
+        AutoHarvest module = AutoHarvest.getInstance();
+        if (module == null || !module.isCheckStock() || farmer.getAttributeStatus("autoseller")) {
             return true;
         }
-        else return false;
-    }
 
-    /**
-     * Checks if grown crop type of block
-     * @param material of block
-     * @return status of block harvestable
-     */
-    private boolean isBlockHarvestable(@NotNull XMaterial material) {
-        return material.equals(XMaterial.valueOf("SUGAR_CANE"))
-                || material.equals(XMaterial.valueOf("MELON_SLICE"))
-                || material.equals(XMaterial.valueOf("PUMPKIN"))
-                || material.equals(XMaterial.valueOf("CACTUS"))
-                || material.equals(XMaterial.valueOf("CHORUS_FLOWER"))
-                || material.equals(XMaterial.valueOf("CHORUS_PLANT"));
-    }
-
-    /**
-     * Checks if grown crop type of ageable crop
-     * @param material of block
-     * @return status of block harvestable
-     */
-    private boolean isCropsHarvestable(@NotNull XMaterial material) {
-        return material.equals(XMaterial.valueOf("WHEAT"))
-                || material.equals(XMaterial.valueOf("CARROT"))
-                || material.equals(XMaterial.valueOf("POTATO"))
-                || material.equals(XMaterial.valueOf("BEETROOT"))
-                || material.equals(XMaterial.valueOf("SWEET_BERRIES"))
-                || material.equals(XMaterial.valueOf("NETHER_WART"));
-    }
-
-    /**
-     * Checks if crop has seed for stock check
-     * @param material of block
-     * @return status of has seed
-     */
-    private XMaterial hasSeed(@NotNull XMaterial material) {
-        if (material.equals(XMaterial.valueOf("WHEAT")))
-            return XMaterial.valueOf("WHEAT_SEEDS");
-        else if (material.equals(XMaterial.valueOf("BEETROOT")))
-            return XMaterial.valueOf("BEETROOT_SEEDS");
-        else return XMaterial.AIR;
-    }
-
-    /**
-     * Harvests crop which age-able and makes age of it 0
-     *
-     * @param state of block
-     * @param material of block
-     * @return is harvesting succeed
-     */
-    private boolean harvestCrops(@NotNull BlockState state, @NotNull XMaterial material) {
-        if (isCropsHarvestable(material)) {
-            BlockData data = state.getBlockData();
-
-            if (data instanceof Ageable) {
-                Ageable ageable = (Ageable) data;
-                int maxAge = ageable.getMaximumAge();
-
-                // Other crops
-                if (ageable.getAge() == maxAge
-                        || ((material.equals(XMaterial.valueOf("NETHER_WART"))
-                        || material.equals(XMaterial.valueOf("BEETROOT"))
-                        || material.equals(XMaterial.valueOf("SWEET_BERRIES")))
-                        && ageable.getAge() == 3)) {
-
-                    ItemStack item = material.parseItem();
-                    // Checks if stock is not full then drops item
-                    // item of crop
-                    if (item != null) {
-                        state.getWorld().dropItemNaturally(state.getLocation(), item);
-                    }
-                    // Item of seed
-                    state.getBlock().getDrops().forEach(seed -> state.getWorld().dropItemNaturally(state.getLocation(), seed));
-
-                    // Makes crop to be zero age
-                    ageable.setAge(0);
-                    state.setBlockData(ageable);
-                    state.update(true);
-                }
-                return true;
-            }
+        if (!isStockAvailable(farmer, material)) {
+            return false;
         }
-        return false;
+
+        XMaterial seed = seedFor(material);
+        ItemStack seedItem = seed.parseItem();
+        return seed == XMaterial.AIR
+                || seedItem == null
+                || !FarmerInv.checkMaterial(seedItem)
+                || isStockAvailable(farmer, seed);
     }
 
-    /**
-     * Parses item stack of crops
-     */
-    private XMaterial parseMaterial(XMaterial material) {
-        if (material.equals(XMaterial.valueOf("BEETROOTS")))
-            material = XMaterial.valueOf("BEETROOT");
-        else if (material.equals(XMaterial.valueOf("POTATOES")))
-            material = XMaterial.valueOf("POTATO");
-        else if (material.equals(XMaterial.valueOf("CARROTS")))
-            material = XMaterial.valueOf("CARROT");
-        else if (material.equals(XMaterial.valueOf("SWEET_BERRY_BUSH")))
-            material = XMaterial.valueOf("SWEET_BERRIES");
-        else if (material.equals(XMaterial.valueOf("MELON")))
-            material = XMaterial.valueOf("MELON_SLICE");
-        else if (material.equals(XMaterial.valueOf("COCOA")))
-            material = XMaterial.valueOf("COCOA_BEANS");
-        return material;
-    }
-
-    /**
-     * Used in harvestCrops for item drops and age of crop
-     * @param state of block
-     * @param material of block
-     */
-    private boolean harvestCocoa(@NotNull BlockState state, @NotNull XMaterial material) {
-        if (material.equals(XMaterial.valueOf("COCOA_BEANS"))) {
-            BlockData data = state.getBlockData();
-
-            if (data instanceof Ageable) {
-                Ageable ageable = (Ageable) data;
-                int maxAge = ageable.getMaximumAge();
-
-                if (ageable.getAge() == maxAge) {
-                    ItemStack item = material.parseItem();
-                    if (item != null) {
-                        item.setAmount(3);
-                        state.getWorld().dropItemNaturally(state.getLocation(), item);
-                    }
-
-                    // Reset cocoa to the smallest growth age
-                    ageable.setAge(0);
-                    state.setBlockData(ageable);
-                    state.update(true);
-                }
-                return true;
-            }
+    private boolean isStockAvailable(@NotNull Farmer farmer, @NotNull XMaterial material) {
+        ItemStack item = material.parseItem();
+        if (item == null || !FarmerInv.checkMaterial(item)) {
+            return false;
         }
-        return false;
+
+        try {
+            FarmerItem stockedItem = farmer.getInv().getStockedItem(material);
+            return stockedItem.getAmount() < farmer.getInv().getCapacity();
+        }
+        catch (NoSuchElementException exception) {
+            return false;
+        }
     }
 
-    /**
-     * Checks if piston is near the block
-     *
-     * @param location of block to check
-     * @return is piston check pass or not
-     */
-    private boolean pistonCheck(@NotNull Location location) {
-        if (AutoHarvest.getInstance().isCheckAllDirections()) {
-            Location loc1 = location.clone().add(-1, 0, 0);
-            Location loc2 = location.clone().add(1, 0, 0);
-            Location loc3 = location.clone().add(0, 0, -1);
-            Location loc4 = location.clone().add(0, 0, 1);
-            if (loc1.getBlock().getType().name().contains("PISTON"))
-                return true;
-            else if (loc2.getBlock().getType().name().contains("PISTON"))
-                return true;
-            else if (loc3.getBlock().getType().name().contains("PISTON"))
-                return true;
-            else if (loc4.getBlock().getType().name().contains("PISTON"))
-                return true;
+    private XMaterial seedFor(@NotNull XMaterial material) {
+        return switch (material.name()) {
+            case "WHEAT" -> XMaterial.WHEAT_SEEDS;
+            case "BEETROOT" -> XMaterial.BEETROOT_SEEDS;
+            default -> XMaterial.AIR;
+        };
+    }
+
+    private boolean pistonCheck(@NotNull Block block, boolean allDirections) {
+        if (allDirections) {
+            return isPiston(block.getRelative(BlockFace.NORTH))
+                    || isPiston(block.getRelative(BlockFace.SOUTH))
+                    || isPiston(block.getRelative(BlockFace.EAST))
+                    || isPiston(block.getRelative(BlockFace.WEST))
+                    || isPiston(block.getRelative(BlockFace.UP));
         }
-        Location loc = location.clone().add(0, 1, 0);
-        return loc.getBlock().getType().name().contains("PISTON");
+        return isPiston(block.getRelative(BlockFace.UP));
+    }
+
+    private boolean isPiston(@NotNull Block block) {
+        return block.getType().name().contains("PISTON");
     }
 }
