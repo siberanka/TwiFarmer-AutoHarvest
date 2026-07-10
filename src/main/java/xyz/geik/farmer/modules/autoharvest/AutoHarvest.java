@@ -1,63 +1,64 @@
 package xyz.geik.farmer.modules.autoharvest;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.event.HandlerList;
+import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.Main;
 import xyz.geik.farmer.modules.FarmerModule;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigFile;
+import xyz.geik.farmer.modules.autoharvest.configuration.ConfigurationMaintenance;
+import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestGuiCreateEvent;
+import xyz.geik.farmer.modules.autoharvest.handlers.CropHarvesting;
+import xyz.geik.farmer.modules.autoharvest.optimization.OptimizedHarvestQueue;
 import xyz.geik.farmer.modules.autoharvest.platform.PaperPlatform;
 import xyz.geik.glib.GLib;
 import xyz.geik.glib.chat.ChatUtils;
-import xyz.geik.glib.shades.okaeri.configs.ConfigManager;
-import xyz.geik.glib.shades.okaeri.configs.yaml.bukkit.YamlBukkitConfigurer;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 
 /**
- * AutoHarvest module main class
+ * AutoHarvest module main class.
  *
  * @author poyraz
  * @author siberanka
  */
 public class AutoHarvest extends FarmerModule {
 
-    /**
-     * Constructor of class
-     */
-    public AutoHarvest() {}
+    private static final Set<String> BUNDLED_LANGUAGES = Set.of("en", "tr", "de");
 
     private static volatile AutoHarvest instance;
 
-    private AutoHarvestEvent autoHarvestEvent;
+    private final AtomicLong lifecycleGeneration = new AtomicLong();
+    private final OptimizedHarvestQueue optimizedHarvestQueue = new OptimizedHarvestQueue();
 
+    private AutoHarvestEvent autoHarvestEvent;
     private AutoHarvestGuiCreateEvent autoHarvestGuiCreateEvent;
 
     private volatile boolean requirePiston;
     private volatile boolean checkAllDirections;
     private volatile boolean withoutFarmer;
     private volatile boolean checkStock = true;
+    private volatile boolean active;
 
     private volatile String customPerm = "farmer.autoharvest";
-
     private volatile Set<XMaterial> crops = Collections.emptySet();
+    private volatile OptimizationSettings optimizationSettings = OptimizationSettings.disabled();
 
     private ConfigFile configFile;
 
-    private final AtomicLong lifecycleGeneration = new AtomicLong();
-
-    private volatile boolean active;
-
-    /**
-     * onEnable method of module
-     */
     @Override
     public void onEnable() {
         instance = this;
@@ -72,86 +73,81 @@ public class AutoHarvest extends FarmerModule {
             return;
         }
 
-        this.setLang(Main.getConfigFile().getSettings().getLang(), this.getClass());
-        setupFile();
+        if (!loadConfigurationFiles()) {
+            setEnabled(false);
+            return;
+        }
+
         if (configFile.isStatus()) {
-            this.setHasGui(true);
-            autoHarvestEvent = new AutoHarvestEvent();
-            autoHarvestGuiCreateEvent = new AutoHarvestGuiCreateEvent();
-            Bukkit.getPluginManager().registerEvents(autoHarvestEvent, Main.getInstance());
-            Bukkit.getPluginManager().registerEvents(autoHarvestGuiCreateEvent, Main.getInstance());
-            applyConfiguration();
-            active = true;
-            String messagex = "&3[" + GLib.getInstance().getName() + "] &a" + getName() + " enabled.";
-            ChatUtils.sendMessage(Bukkit.getConsoleSender(), messagex);
+            activateRuntime();
+            ChatUtils.sendMessage(Bukkit.getConsoleSender(),
+                    "&3[" + GLib.getInstance().getName() + "] &a" + getName() + " enabled.");
             ChatUtils.sendMessage(Bukkit.getConsoleSender(), "&3[" + GLib.getInstance().getName()
                     + "] &7Platform: " + PaperPlatform.getPlatformName());
         }
         else {
-            String messagex = "&3[" + GLib.getInstance().getName() + "] &c" + getName() + " is not loaded.";
-            ChatUtils.sendMessage(Bukkit.getConsoleSender(), messagex);
+            setHasGui(false);
+            ChatUtils.sendMessage(Bukkit.getConsoleSender(),
+                    "&3[" + GLib.getInstance().getName() + "] &c" + getName() + " is not loaded.");
         }
     }
 
-    /**
-     * onReload method of module
-     */
     @Override
     public void onReload() {
-        if (!this.isEnabled())
+        if (!isEnabled()) {
             return;
+        }
+
         lifecycleGeneration.incrementAndGet();
-        applyConfiguration();
-    }
+        unregisterListeners();
+        optimizedHarvestQueue.configure(OptimizationSettings.disabled());
 
-    private void applyConfiguration() {
-        crops = parseCrops(configFile.getItems());
-        requirePiston = configFile.isRequirePiston();
-        checkAllDirections = configFile.isCheckAllDirections();
-        withoutFarmer = configFile.isWithoutFarmer();
-        checkStock = configFile.isCheckStock();
-        customPerm = configFile.getCustomPerm() == null || configFile.getCustomPerm().isBlank()
-                ? "farmer.autoharvest"
-                : configFile.getCustomPerm().trim();
-        setDefaultState(configFile.isDefaultStatus());
-    }
-
-    private Set<XMaterial> parseCrops(List<String> configuredCrops) {
-        EnumSet<XMaterial> parsed = EnumSet.noneOf(XMaterial.class);
-        if (configuredCrops == null) {
-            return Collections.emptySet();
+        if (!loadConfigurationFiles()) {
+            return;
         }
 
-        for (String crop : configuredCrops) {
-            if (crop == null || crop.isBlank()) {
-                continue;
-            }
-            XMaterial.matchXMaterial(crop.trim()).ifPresentOrElse(material ->
-                    parsed.add(normalizeConfiguredCrop(material)), () ->
-                    Main.getInstance().getLogger().warning("Ignoring invalid AutoHarvest crop: " + crop));
+        if (configFile.isStatus()) {
+            activateRuntime();
         }
-        return parsed.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(parsed);
+        else {
+            unregisterListeners();
+        }
     }
 
-    private XMaterial normalizeConfiguredCrop(XMaterial material) {
-        return switch (material.name()) {
-            case "BEETROOTS" -> XMaterial.BEETROOT;
-            case "POTATOES" -> XMaterial.POTATO;
-            case "CARROTS" -> XMaterial.CARROT;
-            case "SWEET_BERRY_BUSH" -> XMaterial.SWEET_BERRIES;
-            case "MELON" -> XMaterial.MELON_SLICE;
-            case "COCOA" -> XMaterial.COCOA_BEANS;
-            default -> material;
-        };
-    }
-
-    /**
-     * onDisable method of module
-     */
     @Override
     public void onDisable() {
         active = false;
         lifecycleGeneration.incrementAndGet();
+        optimizedHarvestQueue.configure(OptimizationSettings.disabled());
+        unregisterListeners();
+        crops = Collections.emptySet();
+        optimizationSettings = OptimizationSettings.disabled();
+        if (instance == this) {
+            instance = null;
+        }
+    }
+
+    private void activateRuntime() {
+        applyConfiguration();
+        registerListeners();
+        setHasGui(true);
+        active = true;
+    }
+
+    private void registerListeners() {
+        if (autoHarvestEvent == null) {
+            autoHarvestEvent = new AutoHarvestEvent();
+            Bukkit.getPluginManager().registerEvents(autoHarvestEvent, Main.getInstance());
+        }
+        if (autoHarvestGuiCreateEvent == null) {
+            autoHarvestGuiCreateEvent = new AutoHarvestGuiCreateEvent();
+            Bukkit.getPluginManager().registerEvents(autoHarvestGuiCreateEvent, Main.getInstance());
+        }
+    }
+
+    private void unregisterListeners() {
+        active = false;
+        setHasGui(false);
         if (autoHarvestEvent != null) {
             HandlerList.unregisterAll(autoHarvestEvent);
             autoHarvestEvent = null;
@@ -161,27 +157,106 @@ public class AutoHarvest extends FarmerModule {
             HandlerList.unregisterAll(autoHarvestGuiCreateEvent);
             autoHarvestGuiCreateEvent = null;
         }
-        crops = Collections.emptySet();
+    }
+
+    private boolean loadConfigurationFiles() {
+        try {
+            File moduleDirectory = getModuleDirectory();
+            String language = resolveLanguage();
+            repairLanguageFiles(moduleDirectory);
+            setLang(language, getClass());
+
+            try (InputStream bundledConfig = openBundledResource("autoharvest/config.yml")) {
+                ConfigurationMaintenance.ConfigSnapshot snapshot = ConfigurationMaintenance.reconcileConfig(
+                        new File(moduleDirectory, "config.yml"),
+                        bundledConfig,
+                        Main.getInstance().getLogger()
+                );
+                configFile = snapshot.config();
+                optimizationSettings = snapshot.optimization();
+            }
+            return true;
+        }
+        catch (IOException | RuntimeException exception) {
+            Main.getInstance().getLogger().log(Level.SEVERE,
+                    "AutoHarvest could not safely load its configuration; the module was not enabled.", exception);
+            return false;
+        }
+    }
+
+    private void repairLanguageFiles(File moduleDirectory) throws IOException {
+        File languageDirectory = new File(moduleDirectory, "lang");
+        for (String language : BUNDLED_LANGUAGES) {
+            File target = new File(languageDirectory, language + ".yml");
+            try (InputStream defaults = openBundledResource("autoharvest/lang/" + language + ".yml")) {
+                ConfigurationMaintenance.reconcileLanguageFile(target, defaults, Main.getInstance().getLogger());
+            }
+        }
+    }
+
+    private String resolveLanguage() {
+        String requested = Main.getConfigFile().getSettings().getLang();
+        String normalized = requested == null ? "en" : requested.trim().toLowerCase(Locale.ROOT);
+        if (BUNDLED_LANGUAGES.contains(normalized)) {
+            return normalized;
+        }
+        Main.getInstance().getLogger().warning("AutoHarvest has no bundled '" + normalized
+                + "' language; falling back to English.");
+        return "en";
+    }
+
+    private InputStream openBundledResource(String path) {
+        InputStream resource = getClass().getClassLoader().getResourceAsStream(path);
+        if (resource == null) {
+            throw new IllegalStateException("Missing bundled AutoHarvest resource: " + path);
+        }
+        return resource;
+    }
+
+    private File getModuleDirectory() {
+        return new File(Main.getInstance().getDataFolder(),
+                "modules/" + getName().toLowerCase(Locale.ROOT));
+    }
+
+    private void applyConfiguration() {
+        crops = parseCrops(configFile.getItems());
+        requirePiston = configFile.isRequirePiston();
+        checkAllDirections = configFile.isCheckAllDirections();
+        withoutFarmer = configFile.isWithoutFarmer();
+        checkStock = configFile.isCheckStock();
+        customPerm = configFile.getCustomPerm();
+        setDefaultState(configFile.isDefaultStatus());
+        optimizedHarvestQueue.configure(optimizationSettings);
+    }
+
+    private Set<XMaterial> parseCrops(List<String> configuredCrops) {
+        EnumSet<XMaterial> parsed = EnumSet.noneOf(XMaterial.class);
+        for (String crop : configuredCrops) {
+            XMaterial.matchXMaterial(crop)
+                    .map(CropHarvesting::normalize)
+                    .filter(CropHarvesting::isSupportedCrop)
+                    .ifPresent(parsed::add);
+        }
+        return parsed.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(parsed);
     }
 
     /**
-     * Checks if auto harvest collect this crop.
-     *
-     * @param material of crop
-     * @return is crop can harvestable
+     * Schedules one validated crop action. When optimize-module is off this
+     * preserves the normal one-tick region delay.
      */
+    public void scheduleHarvest(@NotNull Location location, @NotNull Runnable action) {
+        OptimizedHarvestQueue.SubmitResult result = optimizedHarvestQueue.submit(
+                Main.getInstance(), location, action, Main.getInstance().getLogger());
+        if (result == OptimizedHarvestQueue.SubmitResult.ENQUEUED
+                || result == OptimizedHarvestQueue.SubmitResult.COALESCED) {
+            return;
+        }
+        Bukkit.getRegionScheduler().runDelayed(Main.getInstance(), location.clone(), ignored -> action.run(), 1L);
+    }
+
     public static boolean checkCrop(XMaterial material) {
         AutoHarvest module = instance;
         return module != null && module.active && module.crops.contains(material);
-    }
-
-    public void setupFile() {
-        configFile = ConfigManager.create(ConfigFile.class, (it) -> {
-            it.withConfigurer(new YamlBukkitConfigurer());
-            it.withBindFile(new File(Main.getInstance().getDataFolder(), String.format("/modules/%s/config.yml", getName().toLowerCase())));
-            it.saveDefaults();
-            it.load(true);
-        });
     }
 
     public static AutoHarvest getInstance() {
@@ -216,6 +291,10 @@ public class AutoHarvest extends FarmerModule {
         return configFile;
     }
 
+    public OptimizationSettings getOptimizationSettings() {
+        return optimizationSettings;
+    }
+
     public long getLifecycleGeneration() {
         return lifecycleGeneration.get();
     }
@@ -223,5 +302,4 @@ public class AutoHarvest extends FarmerModule {
     public boolean isActiveGeneration(long generation) {
         return active && lifecycleGeneration.get() == generation;
     }
-
 }

@@ -1,6 +1,5 @@
 package xyz.geik.farmer.modules.autoharvest.handlers;
 
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
@@ -60,8 +59,7 @@ public class AutoHarvestEvent implements Listener {
 
         Location location = newState.getLocation();
         long generation = module.getLifecycleGeneration();
-        Bukkit.getRegionScheduler().runDelayed(Main.getInstance(), location, scheduledTask ->
-                harvestIfEligible(location, material, generation), 1L);
+        module.scheduleHarvest(location, () -> harvestIfEligible(location, material, generation));
     }
 
     private void harvestIfEligible(@NotNull Location location, @NotNull XMaterial material, long generation) {

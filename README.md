@@ -1,6 +1,6 @@
 # Farmer AutoHarvest Module
 
-Automatically harvests mature crops inside Farmer regions and immediately replants ageable crops. The module is built for Paper-compatible servers and uses Paper's region scheduler for Paper, Folia, and Leaf.
+Automatically harvests mature crops inside Farmer regions and replants ageable crops. The module requires Paper-compatible server software and supports Paper, Folia, and Leaf.
 
 ## Compatibility
 
@@ -9,42 +9,66 @@ Automatically harvests mature crops inside Farmer regions and immediately replan
 | 1.21.x | 21 | Paper, Folia, Leaf | v6-b113 or newer |
 | 26.x | 25 | Paper, Folia, Leaf | v6-b113 or newer |
 
-Plain Bukkit and Spigot servers are intentionally unsupported. This project is an external Farmer module rather than a standalone `JavaPlugin`, so Folia capability metadata is supplied by the Farmer host plugin. Farmer v6-b113 declares Folia support and the module performs block work through Paper's `RegionScheduler`.
+Plain Bukkit and Spigot are intentionally unsupported. This is an external Farmer module, not a standalone `JavaPlugin`; the Farmer host plugin supplies the Folia metadata while this module uses Paper's region scheduler for all world access.
 
 ## Installation
 
-1. Install Farmer v6-b113 or newer on a compatible Paper, Folia, or Leaf server.
-2. Place `Farmer-AutoHarvest-1.1.0.jar` in `plugins/Farmer/modules/`.
+1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
+2. Place `Farmer-AutoHarvest-1.2.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
-4. Enable the module in `plugins/Farmer/modules/autoharvest/config.yml`.
+4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
 The module refuses to enable when Paper's region scheduler API is unavailable.
 
-## Behavior
+## Automatic File Maintenance
 
-- Mature crop handling is delayed by one region tick so the final `BlockGrowEvent` state is applied first.
-- The delayed operation revalidates the world, crop type, maturity, piston requirement, Farmer ownership, module state, and stock state.
-- Ageable crops are reset to age zero after their real mature-block drops are captured.
-- Fruit and vertical-growth blocks are removed only after their real drops are captured.
-- A stale or duplicate scheduled operation cannot harvest a crop that is no longer mature.
-- Farmer inventory access triggered by this module is serialized per Farmer object for Folia regions.
+At startup and Farmer reload, AutoHarvest validates its config and bundled language files (`en`, `tr`, `de`). Missing known entries are added automatically. Invalid YAML, wrong data types, empty required text, invalid permissions, invalid crop names, duplicate crop names, and invalid optimization limits are repaired.
 
-## Configuration
+Before changing an existing file, the original is copied to a local backup directory:
 
-The generated `config.yml` documents every setting:
+| File | Backup directory |
+| --- | --- |
+| `config.yml` | `plugins/Farmer/modules/autoharvest/backups/` |
+| `lang/*.yml` | `plugins/Farmer/modules/autoharvest/lang/backups/` |
 
-- `status`: enables the module.
-- `requirePiston`: requires a piston near the crop.
-- `checkAllDirections`: checks horizontal sides in addition to the block above.
-- `withoutFarmer`: allows harvesting outside Farmer-backed regions.
-- `checkStock`: prevents harvesting when the relevant Farmer stock is full.
-- `defaultStatus`: initial AutoHarvest state for a Farmer.
-- `customPerm`: permission required for the GUI toggle.
-- `items`: base item names to harvest. Invalid names are rejected once during configuration loading.
+Unknown entries are preserved so later module versions and server-specific additions are not discarded.
+
+## Optimize Module
+
+`optimize-module.enable` is `false` by default. When enabled, mature crops from the same chunk are coalesced into a bounded region queue. The queue delays and batches work to reduce scheduler pressure during large farm bursts.
+
+```yaml
+optimize-module:
+  enable: false
+  queue:
+    initial-delay-ticks: 2
+    continuation-delay-ticks: 1
+    max-jobs-per-run: 32
+    max-pending-jobs: 4096
+    coalesce-duplicates: true
+```
+
+All child settings are ignored while `enable` is `false`.
+
+- `initial-delay-ticks`: delay before the first queued harvest for a chunk.
+- `continuation-delay-ticks`: delay between later queue batches.
+- `max-jobs-per-run`: upper bound for one region execution.
+- `max-pending-jobs`: global memory and burst guard.
+- `coalesce-duplicates`: merges repeated growth events for the same block while work is pending.
+
+The optimization path is async-safe, not unsafe asynchronous Bukkit access: concurrent queue bookkeeping may happen across Folia regions, but every world read, block mutation, item drop, Farmer lookup, and inventory update still runs on the owning `RegionScheduler` thread. If the queue reaches its bound, that crop safely falls back to the normal one-tick region task rather than being lost.
+
+## Harvest Guarantees
+
+- Mature crops are revalidated after growth before any drop or block mutation.
+- Ageable crops are reset only after real mature-block drops are captured.
+- Stale or duplicate jobs cannot harvest a crop that is no longer mature.
+- Farmer-linked operations revalidate ownership, module state, piston requirements, and stock before execution.
+- Module-triggered Farmer inventory paths are serialized per Farmer to avoid Folia region races.
 
 ## Building
 
-The release JAR targets Java 21 bytecode so the same artifact runs on 1.21.x and 26.x:
+Build the release JAR for 1.21.x with JDK 21:
 
 ```bash
 mvn clean verify -Ppaper-1.21

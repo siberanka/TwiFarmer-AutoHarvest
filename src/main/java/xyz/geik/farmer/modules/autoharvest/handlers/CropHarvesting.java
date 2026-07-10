@@ -19,12 +19,12 @@ import java.util.List;
  * @author siberanka
  * @since 1.1.0
  */
-final class CropHarvesting {
+public final class CropHarvesting {
 
     private CropHarvesting() {
     }
 
-    static @NotNull XMaterial normalize(@NotNull XMaterial material) {
+    public static @NotNull XMaterial normalize(@NotNull XMaterial material) {
         return switch (material.name()) {
             case "BEETROOTS" -> XMaterial.BEETROOT;
             case "POTATOES" -> XMaterial.POTATO;
@@ -34,6 +34,10 @@ final class CropHarvesting {
             case "COCOA" -> XMaterial.COCOA_BEANS;
             default -> material;
         };
+    }
+
+    public static boolean isSupportedCrop(@NotNull XMaterial material) {
+        return isAgeableCrop(material) || isBlockCrop(material);
     }
 
     static boolean isHarvestableGrowth(@NotNull BlockData data, @NotNull XMaterial material) {

@@ -1,0 +1,48 @@
+# Farmer AutoHarvest module configuration
+# Invalid known values are backed up and repaired automatically at startup/reload.
+
+config-version: 2
+
+# Enables the module and its Farmer GUI entry.
+status: false
+
+# Requires a piston above crops before they can be harvested.
+requirePiston: false
+
+# Only used when requirePiston is true. Includes horizontal piston checks.
+checkAllDirections: false
+
+# Allows harvesting in allowed worlds without a Farmer-backed region.
+withoutFarmer: false
+
+# Prevents a Farmer harvest when its relevant stock is full.
+checkStock: true
+
+# Initial AutoHarvest state for newly created Farmers.
+defaultStatus: false
+
+# Permission required to toggle AutoHarvest in the Farmer GUI.
+customPerm: "farmer.autoharvest"
+
+# Base item names handled by AutoHarvest.
+items:
+  - "WHEAT"
+  - "CARROT"
+  - "POTATO"
+  - "PUMPKIN"
+
+# Optional production-focused queue. Every setting below is ignored while enable is false.
+# Bukkit world access remains on Paper's owning region thread; no world mutation is async.
+optimize-module:
+  enable: false
+  queue:
+    # Delay for the first queued harvest after a crop matures.
+    initial-delay-ticks: 2
+    # Delay between later batches from the same chunk queue.
+    continuation-delay-ticks: 1
+    # Maximum validated harvests processed in one region run.
+    max-jobs-per-run: 32
+    # Global in-memory queue bound. Overflow safely falls back to one normal region task.
+    max-pending-jobs: 4096
+    # Merges repeated growth events for the same block while a job is pending.
+    coalesce-duplicates: true
