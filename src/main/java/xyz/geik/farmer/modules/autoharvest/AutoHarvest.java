@@ -14,12 +14,14 @@ import xyz.geik.farmer.modules.autoharvest.configuration.ConfigurationMaintenanc
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TrackingSettings;
+import xyz.geik.farmer.modules.autoharvest.configuration.UpdateSettings;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestGuiCreateEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.CropHarvesting;
 import xyz.geik.farmer.modules.autoharvest.optimization.OptimizedHarvestQueue;
 import xyz.geik.farmer.modules.autoharvest.platform.PaperPlatform;
 import xyz.geik.farmer.modules.autoharvest.tracking.CropTrackingService;
+import xyz.geik.farmer.modules.autoharvest.update.UpdateChecker;
 import xyz.geik.glib.GLib;
 import xyz.geik.glib.chat.ChatUtils;
 import xyz.geik.glib.shades.xseries.XMaterial;
@@ -55,6 +57,7 @@ public class AutoHarvest extends FarmerModule {
     private AutoHarvestEvent autoHarvestEvent;
     private AutoHarvestGuiCreateEvent autoHarvestGuiCreateEvent;
     private CropTrackingService cropTrackingService;
+    private UpdateChecker updateChecker;
 
     private volatile boolean requirePiston;
     private volatile boolean checkAllDirections;
@@ -72,6 +75,7 @@ public class AutoHarvest extends FarmerModule {
     private volatile BackpressureSettings activeBackpressure = BackpressureSettings.BASELINE;
     private volatile TelemetrySettings configuredTelemetry = TelemetrySettings.DEFAULT;
     private volatile TelemetrySettings activeTelemetry = TelemetrySettings.DISABLED;
+    private volatile UpdateSettings updateSettings = UpdateSettings.DEFAULT;
 
     private ConfigFile configFile;
 
@@ -93,6 +97,7 @@ public class AutoHarvest extends FarmerModule {
             setEnabled(false);
             return;
         }
+        startUpdateChecker();
 
         if (configFile.isStatus()) {
             activateRuntime();
@@ -115,6 +120,7 @@ public class AutoHarvest extends FarmerModule {
         }
 
         lifecycleGeneration.incrementAndGet();
+        stopUpdateChecker();
         unregisterListeners();
         optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
                 BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
@@ -122,6 +128,7 @@ public class AutoHarvest extends FarmerModule {
         if (!loadConfigurationFiles()) {
             return;
         }
+        startUpdateChecker();
 
         if (configFile.isStatus()) {
             activateRuntime();
@@ -135,6 +142,7 @@ public class AutoHarvest extends FarmerModule {
     public void onDisable() {
         active = false;
         lifecycleGeneration.incrementAndGet();
+        stopUpdateChecker();
         optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
                 BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
         unregisterListeners();
@@ -147,6 +155,7 @@ public class AutoHarvest extends FarmerModule {
         activeBackpressure = BackpressureSettings.BASELINE;
         configuredTelemetry = TelemetrySettings.DEFAULT;
         activeTelemetry = TelemetrySettings.DISABLED;
+        updateSettings = UpdateSettings.DEFAULT;
         if (instance == this) {
             instance = null;
         }
@@ -212,6 +221,7 @@ public class AutoHarvest extends FarmerModule {
                 configuredTrackingSettings = snapshot.tracking();
                 configuredBackpressure = snapshot.backpressure();
                 configuredTelemetry = snapshot.telemetry();
+                updateSettings = snapshot.update();
             }
             return true;
         }
@@ -254,6 +264,19 @@ public class AutoHarvest extends FarmerModule {
     private File getModuleDirectory() {
         return new File(Main.getInstance().getDataFolder(),
                 "modules/" + getName().toLowerCase(Locale.ROOT));
+    }
+
+    private void startUpdateChecker() {
+        stopUpdateChecker();
+        updateChecker = new UpdateChecker(this, updateSettings);
+        updateChecker.start();
+    }
+
+    private void stopUpdateChecker() {
+        if (updateChecker != null) {
+            updateChecker.stop();
+            updateChecker = null;
+        }
     }
 
     private void applyConfiguration() {

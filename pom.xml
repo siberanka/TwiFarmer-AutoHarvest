@@ -6,7 +6,7 @@
 
     <groupId>xyz.geik.farmer</groupId>
     <artifactId>Farmer-AutoHarvest</artifactId>
-    <version>1.2.2</version>
+    <version>1.2.3</version>
     <name>Farmer AutoHarvest</name>
     <description>Paper, Folia and Leaf compatible automatic harvesting module for Farmer.</description>
     <url>https://github.com/siberanka/TwiFarmer-AutoHarvest</url>
@@ -34,6 +34,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <junit.version>5.12.2</junit.version>
         <mockito.version>5.18.0</mockito.version>
+        <gson.version>2.11.0</gson.version>
     </properties>
 
     <!-- Dependencies -->
@@ -55,6 +56,18 @@
                 <exclusion>
                     <groupId>*</groupId>
                     <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>${gson.version}</version>
+            <scope>provided</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.google.errorprone</groupId>
+                    <artifactId>error_prone_annotations</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>

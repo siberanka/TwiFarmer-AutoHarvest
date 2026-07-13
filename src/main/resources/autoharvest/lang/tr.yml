@@ -1,6 +1,9 @@
 enabled: "&aAktif"
 disabled: "&cDevre dışı"
 
+update:
+  available: "&e[{module}] Güncelleme mevcut: &f{current} &7-> &a{latest}&7. İndir: &b{url}"
+
 moduleGui:
   icon:
     guiInterface: 'h'

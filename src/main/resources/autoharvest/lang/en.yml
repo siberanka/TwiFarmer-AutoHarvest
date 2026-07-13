@@ -1,6 +1,9 @@
 enabled: "&aEnabled"
 disabled: "&cDisabled"
 
+update:
+  available: "&e[{module}] Update available: &f{current} &7-> &a{latest}&7. Download: &b{url}"
+
 moduleGui:
   icon:
     guiInterface: 'h'

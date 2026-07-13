@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.2.2.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.2.3.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -32,6 +32,12 @@ Before changing an existing file, the original is copied to a local backup direc
 | `lang/*.yml` | `plugins/Farmer/modules/autoharvest/lang/backups/` |
 
 Unknown entries are preserved so later module versions and server-specific additions are not discarded.
+
+## Update Checker
+
+AutoHarvest checks the repository's latest stable GitHub release at startup and every six hours by default. The HTTPS request is asynchronous, has strict connection/request timeouts, accepts only release and JAR links under `github.com/siberanka/TwiFarmer-AutoHarvest/releases/`, and is cancelled or invalidated on reload/disable.
+
+When a newer semantic version exists, the localized message includes the `AutoHarvest` module name, installed version, latest version, and direct JAR download link. It is sent once per release to the console and to each online or joining player who is an operator or has `farmer.admin`. Set `update-checker.enable: false` to disable all outbound checks; interval and timeout values are validated and repaired like the other config entries.
 
 ## Optimize Module
 

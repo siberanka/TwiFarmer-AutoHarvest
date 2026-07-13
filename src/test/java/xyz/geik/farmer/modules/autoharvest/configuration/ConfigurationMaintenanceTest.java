@@ -66,6 +66,8 @@ class ConfigurationMaintenanceTest {
         assertEquals(1, snapshot.tracking().maxConcurrentScans());
         assertEquals(128, snapshot.tracking().maxCandidatesPerScan());
         assertEquals(TrackingMode.EVENT_DRIVEN, snapshot.tracking().mode());
+        assertTrue(snapshot.update().enabled());
+        assertEquals(6, snapshot.update().checkIntervalHours());
         assertEquals(List.of("WHEAT", "CARROT", "POTATO", "PUMPKIN"), snapshot.config().getItems());
     }
 
@@ -81,6 +83,11 @@ class ConfigurationMaintenanceTest {
                 defaultStatus: false
                 customPerm: " "
                 items: [WHEAT, AIR, MELON, WHEAT]
+                update-checker:
+                  enable: "yes"
+                  check-interval-hours: 0
+                  connect-timeout-seconds: 100
+                  request-timeout-seconds: 1
                 optimize-module:
                   enable: "yes"
                   queue:
@@ -124,7 +131,11 @@ class ConfigurationMaintenanceTest {
         assertEquals(32, repaired.getInt("optimize-module.tracking.max-sections-per-second"));
         assertEquals(45.0, repaired.getDouble("optimize-module.adaptive-backpressure.pause-above-mspt"));
         assertEquals(40.0, repaired.getDouble("optimize-module.adaptive-backpressure.resume-below-mspt"));
-        assertEquals(4, repaired.getInt("config-version"));
+        assertTrue(repaired.getBoolean("update-checker.enable"));
+        assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
+        assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
+        assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
+        assertEquals(5, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 
@@ -168,6 +179,8 @@ class ConfigurationMaintenanceTest {
         assertEquals("&aEnabled", language.getString("enabled"));
         assertEquals("h", language.getString("moduleGui.icon.guiInterface"));
         assertEquals("&eAuto Harvester", language.getString("moduleGui.icon.name"));
+        assertTrue(language.getString("update.available").contains("{module}"));
+        assertTrue(language.getString("update.available").contains("{url}"));
         assertTrue(language.isList("moduleGui.icon.lore"));
         assertEquals("preserved", language.getString("custom-translation"));
     }

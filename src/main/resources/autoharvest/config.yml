@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 4
+config-version: 5
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -30,6 +30,14 @@ items:
   - "CARROT"
   - "POTATO"
   - "PUMPKIN"
+
+# Checks this module's GitHub repository without blocking a server thread.
+update-checker:
+  enable: true
+  # GitHub's latest stable release is checked at startup and at this interval.
+  check-interval-hours: 6
+  connect-timeout-seconds: 5
+  request-timeout-seconds: 8
 
 # Optional production tuning. Configured child values are ignored while enable is false.
 # Fixed conservative queue/tracking guards remain active even when this is false.

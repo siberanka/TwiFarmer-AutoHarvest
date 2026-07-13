@@ -45,6 +45,7 @@ public final class ConfigurationMaintenance {
     private static final String CONDITIONS = TRACKING + ".conditions";
     private static final String BACKPRESSURE = OPTIMIZE_MODULE + ".adaptive-backpressure";
     private static final String TELEMETRY = OPTIMIZE_MODULE + ".telemetry";
+    private static final String UPDATE_CHECKER = "update-checker";
 
     private ConfigurationMaintenance() {
     }
@@ -76,6 +77,7 @@ public final class ConfigurationMaintenance {
                 readTrackingSettings(loaded.configuration),
                 readBackpressureSettings(loaded.configuration),
                 readTelemetrySettings(loaded.configuration),
+                readUpdateSettings(loaded.configuration),
                 changed
         );
     }
@@ -106,7 +108,7 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= repairInteger(configuration, defaults, "config-version", 4, 4);
+        changed |= repairInteger(configuration, defaults, "config-version", 5, 5);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -115,6 +117,11 @@ public final class ConfigurationMaintenance {
         changed |= repairBoolean(configuration, defaults, "defaultStatus");
         changed |= repairString(configuration, defaults, "customPerm", ConfigurationMaintenance::isValidPermission);
         changed |= repairCropList(configuration, defaults);
+        changed |= ensureSection(configuration, UPDATE_CHECKER);
+        changed |= repairBoolean(configuration, defaults, UPDATE_CHECKER + ".enable");
+        changed |= repairInteger(configuration, defaults, UPDATE_CHECKER + ".check-interval-hours", 1, 168);
+        changed |= repairInteger(configuration, defaults, UPDATE_CHECKER + ".connect-timeout-seconds", 2, 30);
+        changed |= repairInteger(configuration, defaults, UPDATE_CHECKER + ".request-timeout-seconds", 3, 60);
 
         changed |= ensureSection(configuration, OPTIMIZE_MODULE);
         changed |= ensureSection(configuration, QUEUE);
@@ -181,6 +188,7 @@ public final class ConfigurationMaintenance {
         boolean changed = false;
         changed |= ensureSection(configuration, "moduleGui");
         changed |= ensureSection(configuration, "moduleGui.icon");
+        changed |= ensureSection(configuration, "update");
         changed |= repairString(configuration, defaults, "enabled", value -> !value.isBlank());
         changed |= repairString(configuration, defaults, "disabled", value -> !value.isBlank());
         changed |= repairString(configuration, defaults, "moduleGui.icon.guiInterface",
@@ -188,6 +196,8 @@ public final class ConfigurationMaintenance {
         changed |= repairString(configuration, defaults, "moduleGui.icon.skull", ConfigurationMaintenance::isValidBase64);
         changed |= repairString(configuration, defaults, "moduleGui.icon.name", value -> !value.isBlank());
         changed |= repairLore(configuration, defaults, "moduleGui.icon.lore");
+        changed |= repairString(configuration, defaults, "update.available",
+                value -> hasPlaceholders(value, "{module}", "{current}", "{latest}", "{url}"));
         return changed;
     }
 
@@ -358,6 +368,27 @@ public final class ConfigurationMaintenance {
         );
     }
 
+    private static UpdateSettings readUpdateSettings(YamlConfiguration configuration) {
+        return new UpdateSettings(
+                configuration.getBoolean(UPDATE_CHECKER + ".enable"),
+                configuration.getInt(UPDATE_CHECKER + ".check-interval-hours"),
+                configuration.getInt(UPDATE_CHECKER + ".connect-timeout-seconds"),
+                configuration.getInt(UPDATE_CHECKER + ".request-timeout-seconds")
+        );
+    }
+
+    private static boolean hasPlaceholders(String value, String... placeholders) {
+        if (value == null || value.isBlank() || value.length() > 1_024) {
+            return false;
+        }
+        for (String placeholder : placeholders) {
+            if (!value.contains(placeholder)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static boolean isTrackingMode(String value) {
         if (value == null) {
             return false;
@@ -487,6 +518,7 @@ public final class ConfigurationMaintenance {
             @NotNull TrackingSettings tracking,
             @NotNull BackpressureSettings backpressure,
             @NotNull TelemetrySettings telemetry,
+            @NotNull UpdateSettings update,
             boolean repaired
     ) {
     }
