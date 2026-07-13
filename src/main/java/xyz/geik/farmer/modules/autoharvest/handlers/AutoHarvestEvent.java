@@ -45,11 +45,19 @@ public class AutoHarvestEvent implements Listener {
      */
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onHarvestGrowEvent(@NotNull BlockGrowEvent event) {
+        AutoHarvest module = AutoHarvest.getInstance();
+        if (module == null || !module.getActiveTrackingSettings().listensToGrowth()) {
+            return;
+        }
         scheduleIfMature(event.getNewState());
     }
 
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onHarvestFertilizeEvent(@NotNull BlockFertilizeEvent event) {
+        AutoHarvest module = AutoHarvest.getInstance();
+        if (module == null || !module.getActiveTrackingSettings().listensToFertilize()) {
+            return;
+        }
         for (BlockState state : event.getBlocks()) {
             scheduleIfMature(state);
         }
@@ -86,6 +94,10 @@ public class AutoHarvestEvent implements Listener {
         }
 
         try {
+            if (location.getWorld() == null || !location.getWorld().isChunkLoaded(
+                    location.getBlockX() >> 4, location.getBlockZ() >> 4)) {
+                return;
+            }
             Block block = location.getBlock();
             if (!WorldHelper.isFarmerAllowed(block.getWorld().getName())
                     || !AutoHarvest.checkCrop(material)
@@ -95,7 +107,9 @@ public class AutoHarvestEvent implements Listener {
             }
 
             if (module.isWithoutFarmer()) {
-                harvest(block, material);
+                if (module.isActiveGeneration(generation)) {
+                    harvest(block, material);
+                }
                 return;
             }
 
@@ -108,6 +122,7 @@ public class AutoHarvestEvent implements Listener {
             // module's stock/drop path prevents concurrent inventory mutations.
             synchronized (farmer) {
                 if (!isCurrentFarmer(location, farmer)
+                        || !module.isActiveGeneration(generation)
                         || !farmer.getAttributeStatus("autoharvest")
                         || !hasStock(farmer, material)) {
                     return;

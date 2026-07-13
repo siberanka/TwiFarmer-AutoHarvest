@@ -42,6 +42,9 @@ public final class ConfigurationMaintenance {
     private static final String OPTIMIZE_MODULE = "optimize-module";
     private static final String QUEUE = OPTIMIZE_MODULE + ".queue";
     private static final String TRACKING = OPTIMIZE_MODULE + ".tracking";
+    private static final String CONDITIONS = TRACKING + ".conditions";
+    private static final String BACKPRESSURE = OPTIMIZE_MODULE + ".adaptive-backpressure";
+    private static final String TELEMETRY = OPTIMIZE_MODULE + ".telemetry";
 
     private ConfigurationMaintenance() {
     }
@@ -71,6 +74,8 @@ public final class ConfigurationMaintenance {
                 ConfigFile.from(loaded.configuration),
                 readOptimizationSettings(loaded.configuration),
                 readTrackingSettings(loaded.configuration),
+                readBackpressureSettings(loaded.configuration),
+                readTelemetrySettings(loaded.configuration),
                 changed
         );
     }
@@ -101,7 +106,7 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= repairInteger(configuration, defaults, "config-version", 3, 3);
+        changed |= repairInteger(configuration, defaults, "config-version", 4, 4);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -114,20 +119,56 @@ public final class ConfigurationMaintenance {
         changed |= ensureSection(configuration, OPTIMIZE_MODULE);
         changed |= ensureSection(configuration, QUEUE);
         changed |= ensureSection(configuration, TRACKING);
+        changed |= ensureSection(configuration, CONDITIONS);
+        changed |= ensureSection(configuration, BACKPRESSURE);
+        changed |= ensureSection(configuration, TELEMETRY);
         changed |= repairBoolean(configuration, defaults, OPTIMIZE_MODULE + ".enable");
         changed |= repairInteger(configuration, defaults, QUEUE + ".initial-delay-ticks", 1, 20);
         changed |= repairInteger(configuration, defaults, QUEUE + ".continuation-delay-ticks", 1, 20);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".max-jobs-per-run", 1, 512);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".max-pending-jobs", 64, 65_536);
+        changed |= repairInteger(configuration, defaults, QUEUE + ".max-jobs-per-run", 1, 64);
+        changed |= repairInteger(configuration, defaults, QUEUE + ".global-max-jobs-per-tick", 1, 256);
+        changed |= repairInteger(configuration, defaults, QUEUE + ".max-scheduler-submissions-per-tick", 1, 64);
+        changed |= repairInteger(configuration, defaults, QUEUE + ".max-pending-jobs", 64, 16_384);
         changed |= repairBoolean(configuration, defaults, QUEUE + ".coalesce-duplicates");
+        changed |= repairString(configuration, defaults, TRACKING + ".mode",
+                value -> isTrackingMode(value));
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".growth-events");
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".fertilize-events");
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".crop-place-events");
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-chunk-load");
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-farmer-purchase");
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-player-join");
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".farmer-regions-only");
         changed |= repairInteger(configuration, defaults, TRACKING + ".reconcile-interval-ticks", 20, 72_000);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-chunks-per-cycle", 1, 128);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-tracked-chunks", 64, 65_536);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-concurrent-scans", 1, 32);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-pending-scans", 64, 65_536);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-candidates-per-scan", 16, 4_096);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-chunks-per-cycle", 1, 32);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-tracked-chunks", 64, 32_768);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-concurrent-scans", 1, 4);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-snapshot-captures-per-tick", 1, 4);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-scan-starts-per-second", 1, 20);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-sections-per-second", 1, 256);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-block-checks-per-slice", 256, 16_384);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-pending-scans", 64, 16_384);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-candidates-per-scan", 16, 1_024);
         changed |= repairInteger(configuration, defaults, TRACKING + ".purchase-radius-chunks", 1, 32);
         changed |= repairInteger(configuration, defaults, TRACKING + ".bootstrap-radius-chunks", 1, 16);
+        changed |= repairBoolean(configuration, defaults, BACKPRESSURE + ".enable");
+        changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".pause-above-mspt", 20.0, 100.0);
+        changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".resume-below-mspt", 10.0, 99.0);
+        changed |= repairInteger(configuration, defaults, BACKPRESSURE + ".check-interval-ticks", 1, 200);
+        changed |= repairInteger(configuration, defaults,
+                BACKPRESSURE + ".pause-above-region-task-delay-millis", 50, 5_000);
+        changed |= repairInteger(configuration, defaults, BACKPRESSURE + ".region-cooldown-ticks", 20, 1_200);
+        changed |= repairBoolean(configuration, defaults, TELEMETRY + ".enable");
+        changed |= repairInteger(configuration, defaults, TELEMETRY + ".log-interval-seconds", 30, 3_600);
+
+        if (configuration.getDouble(BACKPRESSURE + ".resume-below-mspt")
+                >= configuration.getDouble(BACKPRESSURE + ".pause-above-mspt")) {
+            configuration.set(BACKPRESSURE + ".pause-above-mspt",
+                    defaults.getDouble(BACKPRESSURE + ".pause-above-mspt"));
+            configuration.set(BACKPRESSURE + ".resume-below-mspt",
+                    defaults.getDouble(BACKPRESSURE + ".resume-below-mspt"));
+            changed = true;
+        }
 
         if (!configuration.getBoolean("requirePiston") && configuration.getBoolean("checkAllDirections")) {
             configuration.set("checkAllDirections", false);
@@ -173,6 +214,24 @@ public final class ConfigurationMaintenance {
             }
         }
         configuration.set(path, defaults.getInt(path));
+        return true;
+    }
+
+    private static boolean repairDouble(
+            YamlConfiguration configuration,
+            YamlConfiguration defaults,
+            String path,
+            double minimum,
+            double maximum
+    ) {
+        Object raw = configuration.get(path);
+        if (raw instanceof Number number) {
+            double value = number.doubleValue();
+            if (Double.isFinite(value) && value >= minimum && value <= maximum) {
+                return false;
+            }
+        }
+        configuration.set(path, defaults.getDouble(path));
         return true;
     }
 
@@ -249,6 +308,8 @@ public final class ConfigurationMaintenance {
                 configuration.getInt(QUEUE + ".initial-delay-ticks"),
                 configuration.getInt(QUEUE + ".continuation-delay-ticks"),
                 configuration.getInt(QUEUE + ".max-jobs-per-run"),
+                configuration.getInt(QUEUE + ".global-max-jobs-per-tick"),
+                configuration.getInt(QUEUE + ".max-scheduler-submissions-per-tick"),
                 configuration.getInt(QUEUE + ".max-pending-jobs"),
                 configuration.getBoolean(QUEUE + ".coalesce-duplicates")
         );
@@ -256,15 +317,57 @@ public final class ConfigurationMaintenance {
 
     private static TrackingSettings readTrackingSettings(YamlConfiguration configuration) {
         return new TrackingSettings(
+                TrackingMode.parse(configuration.getString(TRACKING + ".mode")),
+                configuration.getBoolean(CONDITIONS + ".growth-events"),
+                configuration.getBoolean(CONDITIONS + ".fertilize-events"),
+                configuration.getBoolean(CONDITIONS + ".crop-place-events"),
+                configuration.getBoolean(CONDITIONS + ".scan-on-chunk-load"),
+                configuration.getBoolean(CONDITIONS + ".scan-on-farmer-purchase"),
+                configuration.getBoolean(CONDITIONS + ".scan-on-player-join"),
+                configuration.getBoolean(CONDITIONS + ".farmer-regions-only"),
                 configuration.getInt(TRACKING + ".reconcile-interval-ticks"),
                 configuration.getInt(TRACKING + ".max-chunks-per-cycle"),
                 configuration.getInt(TRACKING + ".max-tracked-chunks"),
                 configuration.getInt(TRACKING + ".max-concurrent-scans"),
+                configuration.getInt(TRACKING + ".max-snapshot-captures-per-tick"),
+                configuration.getInt(TRACKING + ".max-scan-starts-per-second"),
+                configuration.getInt(TRACKING + ".max-sections-per-second"),
+                configuration.getInt(TRACKING + ".max-block-checks-per-slice"),
                 configuration.getInt(TRACKING + ".max-pending-scans"),
                 configuration.getInt(TRACKING + ".max-candidates-per-scan"),
                 configuration.getInt(TRACKING + ".purchase-radius-chunks"),
                 configuration.getInt(TRACKING + ".bootstrap-radius-chunks")
         );
+    }
+
+    private static BackpressureSettings readBackpressureSettings(YamlConfiguration configuration) {
+        return new BackpressureSettings(
+                configuration.getBoolean(BACKPRESSURE + ".enable"),
+                configuration.getDouble(BACKPRESSURE + ".pause-above-mspt"),
+                configuration.getDouble(BACKPRESSURE + ".resume-below-mspt"),
+                configuration.getInt(BACKPRESSURE + ".check-interval-ticks"),
+                configuration.getInt(BACKPRESSURE + ".pause-above-region-task-delay-millis"),
+                configuration.getInt(BACKPRESSURE + ".region-cooldown-ticks")
+        );
+    }
+
+    private static TelemetrySettings readTelemetrySettings(YamlConfiguration configuration) {
+        return new TelemetrySettings(
+                configuration.getBoolean(TELEMETRY + ".enable"),
+                configuration.getInt(TELEMETRY + ".log-interval-seconds")
+        );
+    }
+
+    private static boolean isTrackingMode(String value) {
+        if (value == null) {
+            return false;
+        }
+        for (TrackingMode mode : TrackingMode.values()) {
+            if (mode.name().equalsIgnoreCase(value.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isValidPermission(String value) {
@@ -382,6 +485,8 @@ public final class ConfigurationMaintenance {
             @NotNull ConfigFile config,
             @NotNull OptimizationSettings optimization,
             @NotNull TrackingSettings tracking,
+            @NotNull BackpressureSettings backpressure,
+            @NotNull TelemetrySettings telemetry,
             boolean repaired
     ) {
     }

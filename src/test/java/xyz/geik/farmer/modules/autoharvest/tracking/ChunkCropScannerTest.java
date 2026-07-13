@@ -11,6 +11,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -77,5 +78,30 @@ class ChunkCropScannerTest {
         assertTrue(result.containsCrop());
         assertEquals(1, result.candidates().size());
         assertFalse(result.candidates().isEmpty());
+        assertTrue(result.candidateLimitReached());
+        assertTrue(result.checkedBlocks() < 4096);
+    }
+
+    @Test
+    void millionBlockWorkloadNeverExceedsTheConfiguredSlice() {
+        ChunkSnapshot snapshot = mock(ChunkSnapshot.class);
+        when(snapshot.isSectionEmpty(anyInt())).thenReturn(false);
+        when(snapshot.getBlockType(anyInt(), anyInt(), anyInt())).thenReturn(Material.AIR);
+        long checked = 0L;
+
+        for (int chunk = 0; chunk < 11; chunk++) {
+            ChunkCropScanner.ScanCursor cursor = ChunkCropScanner.cursor(-64, 320, 128);
+            while (true) {
+                ChunkCropScanner.SliceResult slice = ChunkCropScanner.scanSlice(
+                        snapshot, Map.of(Material.WHEAT, XMaterial.WHEAT), cursor, 8192);
+                assertTrue(slice.checkedBlocks() <= 8192);
+                checked += slice.checkedBlocks();
+                if (slice.complete()) {
+                    break;
+                }
+            }
+        }
+
+        assertEquals(1_081_344L, checked);
     }
 }

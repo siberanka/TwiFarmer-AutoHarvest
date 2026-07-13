@@ -9,10 +9,22 @@ package xyz.geik.farmer.modules.autoharvest.configuration;
  * @since 1.2.1
  */
 public record TrackingSettings(
+        TrackingMode mode,
+        boolean growthEvents,
+        boolean fertilizeEvents,
+        boolean cropPlaceEvents,
+        boolean scanOnChunkLoad,
+        boolean scanOnFarmerPurchase,
+        boolean scanOnPlayerJoin,
+        boolean farmerRegionsOnly,
         int reconcileIntervalTicks,
         int maxChunksPerCycle,
         int maxTrackedChunks,
         int maxConcurrentScans,
+        int maxSnapshotCapturesPerTick,
+        int maxScanStartsPerSecond,
+        int maxSectionsPerSecond,
+        int maxBlockChecksPerSlice,
         int maxPendingScans,
         int maxCandidatesPerScan,
         int purchaseRadiusChunks,
@@ -20,10 +32,25 @@ public record TrackingSettings(
 ) {
 
     public static final TrackingSettings BASELINE = new TrackingSettings(
-            200, 1, 2_048, 1, 512, 256, 8, 2
+            TrackingMode.EVENT_DRIVEN,
+            true, true, true, false, true, true, true,
+            200, 1, 2_048, 1, 1, 2, 16, 4_096,
+            512, 128, 8, 2
     );
 
     public static TrackingSettings baseline() {
         return BASELINE;
+    }
+
+    public boolean listensToGrowth() {
+        return mode.usesEvents() && growthEvents;
+    }
+
+    public boolean listensToFertilize() {
+        return mode.usesEvents() && fertilizeEvents;
+    }
+
+    public boolean reconcilesLoadedChunks() {
+        return mode.scansLoadedChunks();
     }
 }

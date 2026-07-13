@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 3
+config-version: 4
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -32,7 +32,7 @@ items:
   - "PUMPKIN"
 
 # Optional production tuning. Configured child values are ignored while enable is false.
-# A fixed conservative tracking baseline remains active so mature crops are never event-only.
+# Fixed conservative queue/tracking guards remain active even when this is false.
 # Bukkit world access remains on Paper's owning region thread; no world mutation is async.
 optimize-module:
   enable: false
@@ -41,26 +41,64 @@ optimize-module:
     initial-delay-ticks: 2
     # Delay between later batches from the same chunk queue.
     continuation-delay-ticks: 1
-    # Maximum validated harvests processed in one region run.
-    max-jobs-per-run: 32
-    # Global in-memory queue bound. Overflow safely falls back to one normal region task.
+    # Maximum validated harvests processed by one chunk/region run.
+    max-jobs-per-run: 8
+    # Hard total harvest budget shared by every world and region each tick.
+    global-max-jobs-per-tick: 32
+    # Hard total number of region batches submitted by the dispatcher each tick.
+    max-scheduler-submissions-per-tick: 8
+    # Global in-memory queue bound. Overflow is deferred to reconciliation.
     max-pending-jobs: 4096
     # Merges repeated growth events for the same block while a job is pending.
     coalesce-duplicates: true
   tracking:
-    # Rescan interval for chunks known to contain configured crops.
-    reconcile-interval-ticks: 100
-    # Active crop chunks added back to the scan queue per interval.
+    # EVENT_DRIVEN, PERIODIC_LOADED_CHUNKS or HYBRID.
+    mode: "EVENT_DRIVEN"
+    conditions:
+      # Event signals used by EVENT_DRIVEN and HYBRID modes.
+      growth-events: true
+      fertilize-events: true
+      crop-place-events: true
+      # Broad discovery triggers. Keep chunk-load scanning off on large servers.
+      scan-on-chunk-load: false
+      scan-on-farmer-purchase: true
+      scan-on-player-join: true
+      # Limits event tracking and player bootstrap to active Farmer areas.
+      farmer-regions-only: true
+    # EVENT_DRIVEN revisits known crop chunks; periodic modes rotate known loaded chunks.
+    reconcile-interval-ticks: 200
+    # Chunks added back to the bounded scan queue per reconciliation.
     max-chunks-per-cycle: 2
-    # Memory bound for chunks known to contain configured crops.
+    # Memory bound for crop-bearing or known loaded chunks.
     max-tracked-chunks: 8192
-    # Maximum snapshot analyses running at the same time.
-    max-concurrent-scans: 2
+    # Maximum snapshots retained and analyzed concurrently.
+    max-concurrent-scans: 1
+    # Region-thread snapshot capture submissions allowed per tick.
+    max-snapshot-captures-per-tick: 1
+    # New chunk snapshots allowed per second.
+    max-scan-starts-per-second: 4
+    # Global scan budget in 4096-block chunk sections per second.
+    max-sections-per-second: 32
+    # Maximum primary block reads in one asynchronous slice.
+    max-block-checks-per-slice: 8192
     # Bound for coalesced chunk scan requests.
     max-pending-scans: 4096
-    # Mature crops submitted from one snapshot; later scans collect the rest.
-    max-candidates-per-scan: 512
+    # Stops a dense scan early; later reconciliation collects remaining crops.
+    max-candidates-per-scan: 128
     # Loaded chunk radius reconciled immediately after a Farmer is purchased.
     purchase-radius-chunks: 8
     # Loaded chunk radius reconciled for online players after enable/reload.
     bootstrap-radius-chunks: 3
+  adaptive-backpressure:
+    # Pauses new harvest batches and scans when Paper reports sustained tick pressure.
+    enable: true
+    pause-above-mspt: 45.0
+    resume-below-mspt: 40.0
+    check-interval-ticks: 20
+    # Folia/Leaf safeguard: pause when a region callback arrives this late.
+    pause-above-region-task-delay-millis: 100
+    region-cooldown-ticks: 100
+  telemetry:
+    # Emits low-frequency counters only while work, deferrals or failures exist.
+    enable: true
+    log-interval-seconds: 300

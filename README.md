@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.2.1.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.2.2.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -35,7 +35,7 @@ Unknown entries are preserved so later module versions and server-specific addit
 
 ## Optimize Module
 
-`optimize-module.enable` is `false` by default. When enabled, mature crops from the same chunk are coalesced into a bounded region queue. The queue delays and batches work to reduce scheduler pressure during large farm bursts.
+`optimize-module.enable` is `false` by default. Fixed conservative queue and tracking guards still protect the server in that state, but all configured child values remain inert. Enable it on production servers to select the limits and tracking policy below.
 
 ```yaml
 optimize-module:
@@ -43,47 +43,59 @@ optimize-module:
   queue:
     initial-delay-ticks: 2
     continuation-delay-ticks: 1
-    max-jobs-per-run: 32
+    max-jobs-per-run: 8
+    global-max-jobs-per-tick: 32
+    max-scheduler-submissions-per-tick: 8
     max-pending-jobs: 4096
     coalesce-duplicates: true
   tracking:
-    reconcile-interval-ticks: 100
+    mode: "EVENT_DRIVEN"
+    conditions:
+      growth-events: true
+      fertilize-events: true
+      crop-place-events: true
+      scan-on-chunk-load: false
+      scan-on-farmer-purchase: true
+      scan-on-player-join: true
+      farmer-regions-only: true
+    reconcile-interval-ticks: 200
     max-chunks-per-cycle: 2
     max-tracked-chunks: 8192
-    max-concurrent-scans: 2
+    max-concurrent-scans: 1
+    max-snapshot-captures-per-tick: 1
+    max-scan-starts-per-second: 4
+    max-sections-per-second: 32
+    max-block-checks-per-slice: 8192
     max-pending-scans: 4096
-    max-candidates-per-scan: 512
+    max-candidates-per-scan: 128
     purchase-radius-chunks: 8
     bootstrap-radius-chunks: 3
+  adaptive-backpressure:
+    enable: true
+    pause-above-mspt: 45.0
+    resume-below-mspt: 40.0
+    check-interval-ticks: 20
+    pause-above-region-task-delay-millis: 100
+    region-cooldown-ticks: 100
+  telemetry:
+    enable: true
+    log-interval-seconds: 300
 ```
 
-All child settings are ignored while `enable` is `false`. Correctness tracking remains active with a fixed, conservative baseline; enabling the module applies the configurable production budgets above.
+The most important hard limits are global, not per chunk: `global-max-jobs-per-tick` caps harvest actions across every world and Folia region, `max-scheduler-submissions-per-tick` caps region task fan-out, and `max-sections-per-second` caps primary snapshot block reads in 4096-block units. `max-block-checks-per-slice` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests bounded reconciliation; it never bypasses limits with a direct task.
 
-- `initial-delay-ticks`: delay before the first queued harvest for a chunk.
-- `continuation-delay-ticks`: delay between later queue batches.
-- `max-jobs-per-run`: upper bound for one region execution.
-- `max-pending-jobs`: global memory and burst guard.
-- `coalesce-duplicates`: merges repeated growth events for the same block while work is pending.
-- `reconcile-interval-ticks`: interval for revisiting chunks known to contain crops.
-- `max-chunks-per-cycle`: tracked chunks queued on each reconciliation interval.
-- `max-tracked-chunks`: strict in-memory bound for crop-bearing chunks.
-- `max-concurrent-scans`: maximum immutable snapshots analyzed concurrently.
-- `max-pending-scans`: strict bound for coalesced chunk scan requests.
-- `max-candidates-per-scan`: maximum mature crops submitted from one snapshot pass.
-- `purchase-radius-chunks`: loaded area checked after a Farmer purchase or AutoHarvest enable.
-- `bootstrap-radius-chunks`: loaded area checked around online players after enable/reload.
+Adaptive backpressure uses Paper's rolling MSPT with hysteresis. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Telemetry logs cumulative queue/scan counters only at the configured low frequency and only when useful work, deferral, or failure exists.
 
-The optimization path is async-safe, not unsafe asynchronous Bukkit access: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Empty chunk sections are skipped, chunks are never force-loaded, duplicate scans are coalesced, and every queue has a hard memory/concurrency bound. If the harvest queue reaches its bound, that crop safely falls back to the normal one-tick region task rather than being lost.
+The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or reconciliation is due.
 
 ## Crop Tracking
 
-- `BlockGrowEvent` remains the immediate hot path for normal natural growth.
-- Bone-meal growth is observed through `BlockFertilizeEvent`.
-- Farmer purchase and enabling AutoHarvest trigger a nearest-first scan of already loaded chunks.
-- Chunk load and player bootstrap scans discover mature crops that existed before the module saw a growth event.
-- Only chunks proven to contain configured crops enter periodic reconciliation.
-- Immature crops keep their chunk tracked and are harvested when a later snapshot sees maturity.
-- Chunk unload, module reload, and disable remove tracking state and queued work.
+- `EVENT_DRIVEN` is the default. Growth/fertilize signals harvest immediately, while only known crop or deferred chunks receive slow reconciliation.
+- `PERIODIC_LOADED_CHUNKS` disables immediate growth harvesting and rotates through a bounded registry of known loaded chunks.
+- `HYBRID` combines immediate events with bounded loaded-chunk rotation.
+- Every signal under `tracking.conditions` can be enabled independently. On large servers, keep `scan-on-chunk-load: false` unless periodic discovery is explicitly required.
+- With `farmer-regions-only: true`, event and player bootstrap tracking is accepted only around an enabled Farmer (or when `withoutFarmer` is active). Set it to `false` if periodic mode must discover chunk-loader farms with no nearby player.
+- Farmer purchase and GUI enable scans are nearest-first and inspect only chunks already sent to the player. Chunk unload, module reload, and disable remove or invalidate queued state.
 
 ## Harvest Guarantees
 

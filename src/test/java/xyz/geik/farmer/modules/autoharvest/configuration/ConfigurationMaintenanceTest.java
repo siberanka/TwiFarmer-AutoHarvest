@@ -61,9 +61,11 @@ class ConfigurationMaintenanceTest {
         assertTrue(Files.readString(target.toPath()).contains("# Farmer AutoHarvest module configuration"));
         assertFalse(snapshot.config().isStatus());
         assertFalse(snapshot.optimization().enabled());
-        assertEquals(32, snapshot.optimization().maxJobsPerRun());
-        assertEquals(2, snapshot.tracking().maxConcurrentScans());
-        assertEquals(512, snapshot.tracking().maxCandidatesPerScan());
+        assertEquals(8, snapshot.optimization().maxJobsPerRun());
+        assertEquals(32, snapshot.optimization().globalMaxJobsPerTick());
+        assertEquals(1, snapshot.tracking().maxConcurrentScans());
+        assertEquals(128, snapshot.tracking().maxCandidatesPerScan());
+        assertEquals(TrackingMode.EVENT_DRIVEN, snapshot.tracking().mode());
         assertEquals(List.of("WHEAT", "CARROT", "POTATO", "PUMPKIN"), snapshot.config().getItems());
     }
 
@@ -85,8 +87,16 @@ class ConfigurationMaintenanceTest {
                     initial-delay-ticks: -1
                     continuation-delay-ticks: 0
                     max-jobs-per-run: 900
+                    global-max-jobs-per-tick: 900
+                    max-scheduler-submissions-per-tick: 900
                     max-pending-jobs: 3
                     coalesce-duplicates: "true"
+                  tracking:
+                    mode: "BROKEN"
+                    max-sections-per-second: 9999
+                  adaptive-backpressure:
+                    pause-above-mspt: 30
+                    resume-below-mspt: 40
                 custom-extension: preserved
                 """, StandardCharsets.UTF_8);
 
@@ -103,12 +113,18 @@ class ConfigurationMaintenanceTest {
         assertFalse(repaired.getBoolean("optimize-module.enable"));
         assertEquals(2, repaired.getInt("optimize-module.queue.initial-delay-ticks"));
         assertEquals(1, repaired.getInt("optimize-module.queue.continuation-delay-ticks"));
-        assertEquals(32, repaired.getInt("optimize-module.queue.max-jobs-per-run"));
+        assertEquals(8, repaired.getInt("optimize-module.queue.max-jobs-per-run"));
+        assertEquals(32, repaired.getInt("optimize-module.queue.global-max-jobs-per-tick"));
+        assertEquals(8, repaired.getInt("optimize-module.queue.max-scheduler-submissions-per-tick"));
         assertEquals(4096, repaired.getInt("optimize-module.queue.max-pending-jobs"));
         assertTrue(repaired.getBoolean("optimize-module.queue.coalesce-duplicates"));
-        assertEquals(100, repaired.getInt("optimize-module.tracking.reconcile-interval-ticks"));
+        assertEquals(200, repaired.getInt("optimize-module.tracking.reconcile-interval-ticks"));
         assertEquals(4096, repaired.getInt("optimize-module.tracking.max-pending-scans"));
-        assertEquals(3, repaired.getInt("config-version"));
+        assertEquals("EVENT_DRIVEN", repaired.getString("optimize-module.tracking.mode"));
+        assertEquals(32, repaired.getInt("optimize-module.tracking.max-sections-per-second"));
+        assertEquals(45.0, repaired.getDouble("optimize-module.adaptive-backpressure.pause-above-mspt"));
+        assertEquals(40.0, repaired.getDouble("optimize-module.adaptive-backpressure.resume-below-mspt"));
+        assertEquals(4, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 

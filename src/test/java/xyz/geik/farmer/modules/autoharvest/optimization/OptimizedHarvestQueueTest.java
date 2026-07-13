@@ -1,16 +1,23 @@
 package xyz.geik.farmer.modules.autoharvest.optimization;
 
+import io.papermc.paper.threadedregions.scheduler.GlobalRegionScheduler;
 import io.papermc.paper.threadedregions.scheduler.RegionScheduler;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
+import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -20,6 +27,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class OptimizedHarvestQueueTest {
@@ -27,50 +36,153 @@ class OptimizedHarvestQueueTest {
     private static final Logger LOGGER = Logger.getLogger("OptimizedHarvestQueueTest");
 
     @Test
-    void disabledOptimizationDoesNotScheduleOrRunWork() {
+    void stoppedQueueDoesNotScheduleOrRunWork() {
         OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
         AtomicInteger executions = new AtomicInteger();
 
         OptimizedHarvestQueue.SubmitResult result = queue.submit(
                 mock(Plugin.class), mock(Location.class), executions::incrementAndGet, LOGGER);
 
-        assertEquals(OptimizedHarvestQueue.SubmitResult.DISABLED, result);
+        assertEquals(OptimizedHarvestQueue.SubmitResult.STOPPED, result);
         assertEquals(0, executions.get());
     }
 
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
-    void enabledOptimizationRunsTheBatchOnPaperRegionScheduler() {
+    void globalBudgetIsSharedAcrossManyChunkQueues() {
         OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
-        queue.configure(new OptimizationSettings(true, 2, 1, 32, 64, true));
+        queue.configure(settings(8, 10, 64, 256), BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
 
         Plugin plugin = mock(Plugin.class);
-        Location location = mock(Location.class);
-        Location anchor = mock(Location.class);
         World world = mock(World.class);
-        RegionScheduler scheduler = mock(RegionScheduler.class);
+        RegionScheduler regionScheduler = mock(RegionScheduler.class);
+        GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+        ScheduledTask ticker = mock(ScheduledTask.class);
+        UUID worldId = UUID.randomUUID();
         AtomicInteger executions = new AtomicInteger();
-
-        when(location.getWorld()).thenReturn(world);
-        when(world.getUID()).thenReturn(UUID.randomUUID());
-        when(location.getBlockX()).thenReturn(8);
-        when(location.getBlockY()).thenReturn(64);
-        when(location.getBlockZ()).thenReturn(8);
-        when(location.clone()).thenReturn(anchor);
+        AtomicReference<Consumer<ScheduledTask>> tick = new AtomicReference<>();
+        when(world.getUID()).thenReturn(worldId);
+        when(ticker.getOwningPlugin()).thenReturn(plugin);
 
         try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-            bukkit.when(Bukkit::getRegionScheduler).thenReturn(scheduler);
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(globalScheduler);
+            bukkit.when(Bukkit::getRegionScheduler).thenReturn(regionScheduler);
+            bukkit.when(Bukkit::getAverageTickTime).thenReturn(10.0);
+            doAnswer(invocation -> {
+                tick.set(invocation.getArgument(1));
+                return ticker;
+            }).when(globalScheduler).runAtFixedRate(eq(plugin), any(), eq(1L), eq(1L));
             doAnswer(invocation -> {
                 Consumer callback = invocation.getArgument(2);
                 callback.accept(null);
                 return null;
-            }).when(scheduler).runDelayed(eq(plugin), eq(anchor), any(), eq(2L));
+            }).when(regionScheduler).run(eq(plugin), any(Location.class), any());
 
-            OptimizedHarvestQueue.SubmitResult result = queue.submit(
-                    plugin, location, executions::incrementAndGet, LOGGER);
+            for (int index = 0; index < 100; index++) {
+                assertEquals(OptimizedHarvestQueue.SubmitResult.ENQUEUED,
+                        queue.submit(plugin, location(world, index * 16), executions::incrementAndGet, LOGGER));
+            }
+            tick.get().accept(ticker);
 
-            assertEquals(OptimizedHarvestQueue.SubmitResult.ENQUEUED, result);
-            assertEquals(1, executions.get());
+            assertEquals(10, executions.get());
+            assertEquals(90, queue.stats().pendingJobs());
         }
+    }
+
+    @Test
+    void overflowDefersWithoutSubmittingARegionTask() {
+        OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
+        queue.configure(settings(4, 8, 4, 64), BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
+        Plugin plugin = mock(Plugin.class);
+        World world = mock(World.class);
+        RegionScheduler regionScheduler = mock(RegionScheduler.class);
+        GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+        when(world.getUID()).thenReturn(UUID.randomUUID());
+        when(globalScheduler.runAtFixedRate(eq(plugin), any(), eq(1L), eq(1L)))
+                .thenReturn(mock(ScheduledTask.class));
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(globalScheduler);
+            bukkit.when(Bukkit::getRegionScheduler).thenReturn(regionScheduler);
+            for (int index = 0; index < 64; index++) {
+                assertEquals(OptimizedHarvestQueue.SubmitResult.ENQUEUED,
+                        queue.submit(plugin, location(world, index * 16), () -> { }, LOGGER));
+            }
+
+            assertEquals(OptimizedHarvestQueue.SubmitResult.DEFERRED,
+                    queue.submit(plugin, location(world, 4096), () -> { }, LOGGER));
+            verify(regionScheduler, never()).run(any(), any(Location.class), any());
+            assertEquals(1, queue.stats().deferredJobs());
+        }
+    }
+
+    @Test
+    void duplicateFloodConsumesOneBoundedSlot() {
+        OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
+        queue.configure(settings(4, 8, 4, 64), BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
+        Plugin plugin = mock(Plugin.class);
+        World world = mock(World.class);
+        GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+        Location location = location(world, 8);
+        when(world.getUID()).thenReturn(UUID.randomUUID());
+        when(globalScheduler.runAtFixedRate(eq(plugin), any(), eq(1L), eq(1L)))
+                .thenReturn(mock(ScheduledTask.class));
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(globalScheduler);
+            assertEquals(OptimizedHarvestQueue.SubmitResult.ENQUEUED,
+                    queue.submit(plugin, location, () -> { }, LOGGER));
+            for (int index = 0; index < 65_536; index++) {
+                assertEquals(OptimizedHarvestQueue.SubmitResult.COALESCED,
+                        queue.submit(plugin, location, () -> { }, LOGGER));
+            }
+
+            assertEquals(1, queue.stats().pendingJobs());
+            assertEquals(65_536L, queue.stats().coalescedJobs());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void reconfigureInvalidatesAnAlreadyScheduledDispatcher() {
+        OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
+        queue.configure(settings(4, 8, 4, 64), BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
+        Plugin plugin = mock(Plugin.class);
+        World world = mock(World.class);
+        GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+        ScheduledTask ticker = mock(ScheduledTask.class);
+        AtomicReference<Consumer<ScheduledTask>> tick = new AtomicReference<>();
+        AtomicInteger executions = new AtomicInteger();
+        when(world.getUID()).thenReturn(UUID.randomUUID());
+        doAnswer(invocation -> {
+            tick.set(invocation.getArgument(1));
+            return ticker;
+        }).when(globalScheduler).runAtFixedRate(eq(plugin), any(), eq(1L), eq(1L));
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(globalScheduler);
+            queue.submit(plugin, location(world, 8), executions::incrementAndGet, LOGGER);
+            queue.configure(OptimizationSettings.stopped(), BackpressureSettings.BASELINE,
+                    TelemetrySettings.DISABLED);
+            tick.get().accept(ticker);
+
+            assertEquals(0, executions.get());
+            assertEquals(0, queue.stats().pendingJobs());
+        }
+    }
+
+    private OptimizationSettings settings(int perRun, int global, int submissions, int pending) {
+        return new OptimizationSettings(true, 1, 1, perRun, global, submissions, pending, true);
+    }
+
+    private Location location(World world, int blockX) {
+        Location location = mock(Location.class);
+        Location anchor = mock(Location.class);
+        when(location.getWorld()).thenReturn(world);
+        when(location.getBlockX()).thenReturn(blockX);
+        when(location.getBlockY()).thenReturn(64);
+        when(location.getBlockZ()).thenReturn(8);
+        when(location.clone()).thenReturn(anchor);
+        return location;
     }
 }

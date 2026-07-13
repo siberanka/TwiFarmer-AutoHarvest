@@ -1,43 +1,67 @@
 package xyz.geik.farmer.modules.autoharvest.optimization;
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
+import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
+import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Batches harvest work per chunk without touching Bukkit world state away from
- * the owning Paper/Folia region scheduler.
- *
- * @author siberanka
- * @since 1.2.0
+ * Globally budgeted, fair per-chunk harvest queue. Queue overflow is deferred
+ * to reconciliation and never converted into an unbounded scheduler task.
  */
 public final class OptimizedHarvestQueue {
 
-    private static final long OVERFLOW_LOG_INTERVAL_NANOS = 5_000_000_000L;
+    private static final long OVERFLOW_LOG_INTERVAL_NANOS = 30_000_000_000L;
 
     private final ConcurrentMap<ChunkKey, ChunkQueue> queues = new ConcurrentHashMap<>();
     private final ConcurrentMap<BlockKey, Boolean> pendingBlocks = new ConcurrentHashMap<>();
+    private final ConcurrentLinkedQueue<ReadyQueue> readyQueues = new ConcurrentLinkedQueue<>();
     private final AtomicInteger pendingJobs = new AtomicInteger();
+    private final AtomicInteger globalPermits = new AtomicInteger();
+    private final AtomicLong revision = new AtomicLong();
+    private final AtomicLong dispatcherTicks = new AtomicLong();
     private final AtomicLong nextOverflowLogNanos = new AtomicLong();
+    private final AtomicLong nextTelemetryNanos = new AtomicLong();
+    private final LongAdder processedJobs = new LongAdder();
+    private final LongAdder deferredJobs = new LongAdder();
+    private final LongAdder coalescedJobs = new LongAdder();
+    private final LongAdder schedulerFailures = new LongAdder();
+    private final LongAdder pausedTicks = new LongAdder();
+    private final AdaptiveBackpressure backpressure = new AdaptiveBackpressure();
+    private final Object tickerLock = new Object();
 
-    private volatile OptimizationSettings settings = OptimizationSettings.disabled();
+    private volatile OptimizationSettings settings = OptimizationSettings.stopped();
+    private volatile TelemetrySettings telemetry = TelemetrySettings.DISABLED;
+    private volatile ScheduledTask ticker;
+    private volatile Logger logger;
 
-    public void configure(@NotNull OptimizationSettings nextSettings) {
-        settings = OptimizationSettings.disabled();
+    public void configure(
+            @NotNull OptimizationSettings nextSettings,
+            @NotNull BackpressureSettings backpressureSettings,
+            @NotNull TelemetrySettings telemetrySettings
+    ) {
+        settings = OptimizationSettings.stopped();
+        revision.incrementAndGet();
         clear();
+        backpressure.configure(backpressureSettings);
+        telemetry = telemetrySettings;
         settings = nextSettings;
     }
 
@@ -45,36 +69,37 @@ public final class OptimizedHarvestQueue {
             @NotNull Plugin plugin,
             @NotNull Location location,
             @NotNull Runnable action,
-            @NotNull Logger logger
+            @NotNull Logger operationLogger
     ) {
         OptimizationSettings current = settings;
         if (!current.enabled()) {
-            return SubmitResult.DISABLED;
+            return SubmitResult.STOPPED;
         }
+        logger = operationLogger;
 
         World world = location.getWorld();
         if (world == null) {
-            return SubmitResult.FALLBACK_TO_DIRECT;
+            deferredJobs.increment();
+            return SubmitResult.DEFERRED;
         }
 
         BlockKey blockKey = new BlockKey(world.getUID(), location.getBlockX(), location.getBlockY(), location.getBlockZ());
         if (current.coalesceDuplicates() && pendingBlocks.putIfAbsent(blockKey, Boolean.TRUE) != null) {
+            coalescedJobs.increment();
             return SubmitResult.COALESCED;
         }
 
         if (!reserveSlot(current.maxPendingJobs())) {
-            if (current.coalesceDuplicates()) {
-                pendingBlocks.remove(blockKey);
-            }
-            logOverflow(logger);
-            return SubmitResult.FALLBACK_TO_DIRECT;
+            pendingBlocks.remove(blockKey);
+            deferredJobs.increment();
+            logOverflow(operationLogger);
+            return SubmitResult.DEFERRED;
         }
 
         ChunkKey chunkKey = new ChunkKey(world.getUID(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
         QueueJob job = new QueueJob(blockKey, action);
         ChunkQueue queue;
-        boolean schedule;
-
+        boolean ready = false;
         while (true) {
             queue = queues.computeIfAbsent(chunkKey, ignored -> new ChunkQueue(location.clone()));
             synchronized (queue) {
@@ -82,88 +107,215 @@ public final class OptimizedHarvestQueue {
                     continue;
                 }
                 queue.jobs.addLast(job);
-                schedule = !queue.scheduled;
-                if (schedule) {
-                    queue.scheduled = true;
+                if (!queue.scheduled && !queue.ready) {
+                    queue.ready = true;
+                    ready = true;
                 }
                 break;
             }
         }
 
-        if (schedule && !scheduleRun(plugin, chunkKey, queue, current.initialDelayTicks(), logger)) {
+        if (ready) {
+            readyQueues.offer(new ReadyQueue(chunkKey, queue, readyAtTick(current.initialDelayTicks())));
+        }
+        if (!ensureTicker(plugin, operationLogger)) {
             removeJob(chunkKey, queue, job);
-            return SubmitResult.FALLBACK_TO_DIRECT;
+            ChunkQueue failedQueue = queue;
+            readyQueues.removeIf(entry -> entry.queue() == failedQueue);
+            deferredJobs.increment();
+            return SubmitResult.DEFERRED;
         }
         return SubmitResult.ENQUEUED;
     }
 
     public void clear() {
-        for (ChunkQueue queue : queues.values()) {
-            synchronized (queue) {
-                queue.jobs.clear();
-                queue.scheduled = false;
+        synchronized (tickerLock) {
+            ScheduledTask currentTicker = ticker;
+            ticker = null;
+            if (currentTicker != null) {
+                currentTicker.cancel();
             }
         }
+        for (var entry : queues.entrySet()) {
+            discardQueue(entry.getKey(), entry.getValue());
+        }
         queues.clear();
+        readyQueues.clear();
         pendingBlocks.clear();
         pendingJobs.set(0);
+        globalPermits.set(0);
+        dispatcherTicks.set(0L);
     }
 
-    private void drain(@NotNull Plugin plugin, @NotNull ChunkKey key, @NotNull ChunkQueue queue, @NotNull Logger logger) {
+    public @NotNull QueueStats stats() {
+        return new QueueStats(pendingJobs.get(), queues.size(), processedJobs.sum(), deferredJobs.sum(),
+                coalescedJobs.sum(), schedulerFailures.sum(), pausedTicks.sum());
+    }
+
+    private boolean ensureTicker(Plugin plugin, Logger operationLogger) {
+        if (ticker != null) {
+            return true;
+        }
+        synchronized (tickerLock) {
+            if (ticker != null) {
+                return true;
+            }
+            long currentRevision = revision.get();
+            try {
+                ticker = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
+                        task -> tick(plugin, task, currentRevision), 1L, 1L);
+                return true;
+            }
+            catch (RuntimeException exception) {
+                schedulerFailures.increment();
+                operationLogger.log(Level.WARNING, "AutoHarvest could not start its bounded harvest dispatcher.", exception);
+                return false;
+            }
+        }
+    }
+
+    private void tick(Plugin plugin, ScheduledTask task, long expectedRevision) {
         OptimizationSettings current = settings;
-        if (!current.enabled()) {
+        if (!current.enabled() || expectedRevision != revision.get()) {
+            stopTicker(task);
+            return;
+        }
+
+        globalPermits.set(current.globalMaxJobsPerTick());
+        long currentTick = dispatcherTicks.incrementAndGet();
+        if (!backpressure.permitsWork()) {
+            pausedTicks.increment();
+            logTelemetry();
+            return;
+        }
+
+        int attempts = Math.min(queues.size(), current.maxSchedulerSubmissionsPerTick() * 4);
+        int submitted = 0;
+        while (attempts-- > 0 && submitted < current.maxSchedulerSubmissionsPerTick()) {
+            ReadyQueue ready = readyQueues.poll();
+            if (ready == null) {
+                break;
+            }
+            ChunkQueue queue = ready.queue();
+            synchronized (queue) {
+                if (queues.get(ready.key()) != queue || !queue.ready || queue.jobs.isEmpty()) {
+                    continue;
+                }
+                if (ready.readyAtTick() > currentTick) {
+                    readyQueues.offer(ready);
+                    continue;
+                }
+                queue.ready = false;
+                queue.scheduled = true;
+            }
+            if (!scheduleRegionRun(plugin, ready.key(), queue, expectedRevision)) {
+                discardQueue(ready.key(), queue);
+            }
+            submitted++;
+        }
+        logTelemetry();
+
+        if (readyQueues.isEmpty()) {
+            stopTicker(task);
+        }
+    }
+
+    private boolean scheduleRegionRun(Plugin plugin, ChunkKey key, ChunkQueue queue, long expectedRevision) {
+        try {
+            long scheduledAt = System.nanoTime();
+            Bukkit.getRegionScheduler().run(plugin, queue.anchor,
+                    ignored -> drain(plugin, key, queue, expectedRevision, scheduledAt));
+            return true;
+        }
+        catch (RuntimeException exception) {
+            schedulerFailures.increment();
+            Logger currentLogger = logger;
+            if (currentLogger != null) {
+                currentLogger.log(Level.WARNING, "AutoHarvest could not schedule a bounded region batch.", exception);
+            }
+            return false;
+        }
+    }
+
+    private void drain(Plugin plugin, ChunkKey key, ChunkQueue queue, long expectedRevision, long scheduledAt) {
+        backpressure.observeRegionTaskDelay(scheduledAt);
+        OptimizationSettings current = settings;
+        if (!current.enabled() || expectedRevision != revision.get()) {
             discardQueue(key, queue);
             return;
         }
 
         int processed = 0;
-        while (processed++ < current.maxJobsPerRun()) {
+        while (processed < current.maxJobsPerRun() && acquireGlobalPermit()) {
             QueueJob job;
             synchronized (queue) {
                 job = queue.jobs.pollFirst();
             }
             if (job == null) {
+                globalPermits.incrementAndGet();
                 break;
             }
-
             try {
                 job.action.run();
             }
             catch (RuntimeException exception) {
-                logger.log(Level.WARNING, "AutoHarvest optimized queue rejected a queued operation.", exception);
+                Logger currentLogger = logger;
+                if (currentLogger != null) {
+                    currentLogger.log(Level.WARNING, "AutoHarvest rejected a queued crop operation.", exception);
+                }
             }
             finally {
+                processed++;
+                processedJobs.increment();
                 releaseJob(job);
             }
         }
 
-        boolean reschedule;
+        boolean hasMore;
         synchronized (queue) {
-            reschedule = !queue.jobs.isEmpty();
-            if (!reschedule) {
-                queue.scheduled = false;
+            queue.scheduled = false;
+            hasMore = !queue.jobs.isEmpty();
+            if (hasMore) {
+                queue.ready = true;
+            }
+            else {
                 queues.remove(key, queue);
             }
         }
-        if (reschedule && !scheduleRun(plugin, key, queue, current.continuationDelayTicks(), logger)) {
-            discardQueue(key, queue);
+        if (hasMore) {
+            readyQueues.offer(new ReadyQueue(key, queue, readyAtTick(current.continuationDelayTicks())));
+            Logger currentLogger = logger;
+            if (currentLogger != null) {
+                ensureTicker(plugin, currentLogger);
+            }
         }
     }
 
-    private boolean scheduleRun(
-            Plugin plugin,
-            ChunkKey key,
-            ChunkQueue queue,
-            int delayTicks,
-            Logger logger
-    ) {
-        try {
-            Bukkit.getRegionScheduler().runDelayed(plugin, queue.anchor, ignored -> drain(plugin, key, queue, logger), delayTicks);
-            return true;
+    private boolean acquireGlobalPermit() {
+        while (true) {
+            int current = globalPermits.get();
+            if (current <= 0) {
+                return false;
+            }
+            if (globalPermits.compareAndSet(current, current - 1)) {
+                return true;
+            }
         }
-        catch (RuntimeException exception) {
-            logger.log(Level.WARNING, "AutoHarvest could not schedule an optimized region batch.", exception);
-            return false;
+    }
+
+    private void stopTicker(ScheduledTask task) {
+        synchronized (tickerLock) {
+            if (ticker == task) {
+                ticker = null;
+                task.cancel();
+            }
+        }
+        if (!readyQueues.isEmpty()) {
+            Logger currentLogger = logger;
+            Plugin plugin = task.getOwningPlugin();
+            if (currentLogger != null) {
+                ensureTicker(plugin, currentLogger);
+            }
         }
     }
 
@@ -171,6 +323,7 @@ public final class OptimizedHarvestQueue {
         synchronized (queue) {
             queue.jobs.remove(job);
             if (queue.jobs.isEmpty()) {
+                queue.ready = false;
                 queue.scheduled = false;
                 queues.remove(key, queue);
             }
@@ -183,12 +336,11 @@ public final class OptimizedHarvestQueue {
         synchronized (queue) {
             discarded = new ArrayDeque<>(queue.jobs);
             queue.jobs.clear();
+            queue.ready = false;
             queue.scheduled = false;
             queues.remove(key, queue);
         }
-        for (QueueJob job : discarded) {
-            releaseJob(job);
-        }
+        discarded.forEach(this::releaseJob);
     }
 
     private boolean reserveSlot(int limit) {
@@ -204,23 +356,59 @@ public final class OptimizedHarvestQueue {
     }
 
     private void releaseJob(QueueJob job) {
-        pendingBlocks.remove(job.blockKey);
+        pendingBlocks.remove(job.blockKey());
         pendingJobs.updateAndGet(current -> Math.max(0, current - 1));
     }
 
-    private void logOverflow(Logger logger) {
+    private long readyAtTick(int delayTicks) {
+        return dispatcherTicks.get() + delayTicks;
+    }
+
+    private void logOverflow(Logger operationLogger) {
         long now = System.nanoTime();
         long next = nextOverflowLogNanos.get();
         if (now >= next && nextOverflowLogNanos.compareAndSet(next, now + OVERFLOW_LOG_INTERVAL_NANOS)) {
-            logger.warning("AutoHarvest optimize-module queue is full; using a normal region task for this crop.");
+            operationLogger.warning("AutoHarvest harvest queue is full; crops are deferred to bounded reconciliation.");
+        }
+    }
+
+    private void logTelemetry() {
+        TelemetrySettings current = telemetry;
+        Logger currentLogger = logger;
+        if (!current.enabled() || currentLogger == null) {
+            return;
+        }
+        long now = System.nanoTime();
+        long interval = current.logIntervalSeconds() * 1_000_000_000L;
+        long next = nextTelemetryNanos.get();
+        if (now >= next && nextTelemetryNanos.compareAndSet(next, now + interval)) {
+            QueueStats stats = stats();
+            if (stats.pendingJobs() > 0 || stats.deferredJobs() > 0 || stats.schedulerFailures() > 0) {
+                currentLogger.info("AutoHarvest queue: pending=" + stats.pendingJobs()
+                        + ", chunks=" + stats.pendingChunks() + ", processed=" + stats.processedJobs()
+                        + ", deferred=" + stats.deferredJobs() + ", coalesced=" + stats.coalescedJobs()
+                        + ", scheduler-failures=" + stats.schedulerFailures()
+                        + ", backpressure-paused=" + backpressure.isPaused());
+            }
         }
     }
 
     public enum SubmitResult {
-        DISABLED,
+        STOPPED,
         ENQUEUED,
         COALESCED,
-        FALLBACK_TO_DIRECT
+        DEFERRED
+    }
+
+    public record QueueStats(
+            int pendingJobs,
+            int pendingChunks,
+            long processedJobs,
+            long deferredJobs,
+            long coalescedJobs,
+            long schedulerFailures,
+            long pausedTicks
+    ) {
     }
 
     private record ChunkKey(UUID worldId, int chunkX, int chunkZ) {
@@ -232,10 +420,14 @@ public final class OptimizedHarvestQueue {
     private record QueueJob(BlockKey blockKey, Runnable action) {
     }
 
+    private record ReadyQueue(ChunkKey key, ChunkQueue queue, long readyAtTick) {
+    }
+
     private static final class ChunkQueue {
         private final Location anchor;
         private final Deque<QueueJob> jobs = new ArrayDeque<>();
         private boolean scheduled;
+        private boolean ready;
 
         private ChunkQueue(Location anchor) {
             this.anchor = anchor;

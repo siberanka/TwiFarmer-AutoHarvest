@@ -9,8 +9,10 @@ import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.Main;
 import xyz.geik.farmer.modules.FarmerModule;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigFile;
+import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigurationMaintenance;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
+import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TrackingSettings;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestGuiCreateEvent;
@@ -48,7 +50,6 @@ public class AutoHarvest extends FarmerModule {
     private static volatile AutoHarvest instance;
 
     private final AtomicLong lifecycleGeneration = new AtomicLong();
-    private final AtomicLong nextScheduleFailureNanos = new AtomicLong();
     private final OptimizedHarvestQueue optimizedHarvestQueue = new OptimizedHarvestQueue();
 
     private AutoHarvestEvent autoHarvestEvent;
@@ -64,9 +65,13 @@ public class AutoHarvest extends FarmerModule {
     private volatile String customPerm = "farmer.autoharvest";
     private volatile Set<XMaterial> crops = Collections.emptySet();
     private volatile Map<Material, XMaterial> cropMaterials = Collections.emptyMap();
-    private volatile OptimizationSettings optimizationSettings = OptimizationSettings.disabled();
+    private volatile OptimizationSettings optimizationSettings = OptimizationSettings.DEFAULT;
     private volatile TrackingSettings configuredTrackingSettings = TrackingSettings.baseline();
     private volatile TrackingSettings activeTrackingSettings = TrackingSettings.baseline();
+    private volatile BackpressureSettings configuredBackpressure = BackpressureSettings.DEFAULT;
+    private volatile BackpressureSettings activeBackpressure = BackpressureSettings.BASELINE;
+    private volatile TelemetrySettings configuredTelemetry = TelemetrySettings.DEFAULT;
+    private volatile TelemetrySettings activeTelemetry = TelemetrySettings.DISABLED;
 
     private ConfigFile configFile;
 
@@ -111,7 +116,8 @@ public class AutoHarvest extends FarmerModule {
 
         lifecycleGeneration.incrementAndGet();
         unregisterListeners();
-        optimizedHarvestQueue.configure(OptimizationSettings.disabled());
+        optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
+                BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
 
         if (!loadConfigurationFiles()) {
             return;
@@ -129,13 +135,18 @@ public class AutoHarvest extends FarmerModule {
     public void onDisable() {
         active = false;
         lifecycleGeneration.incrementAndGet();
-        optimizedHarvestQueue.configure(OptimizationSettings.disabled());
+        optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
+                BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
         unregisterListeners();
         crops = Collections.emptySet();
         cropMaterials = Collections.emptyMap();
-        optimizationSettings = OptimizationSettings.disabled();
+        optimizationSettings = OptimizationSettings.DEFAULT;
         configuredTrackingSettings = TrackingSettings.baseline();
         activeTrackingSettings = TrackingSettings.baseline();
+        configuredBackpressure = BackpressureSettings.DEFAULT;
+        activeBackpressure = BackpressureSettings.BASELINE;
+        configuredTelemetry = TelemetrySettings.DEFAULT;
+        activeTelemetry = TelemetrySettings.DISABLED;
         if (instance == this) {
             instance = null;
         }
@@ -146,7 +157,7 @@ public class AutoHarvest extends FarmerModule {
         setHasGui(true);
         active = true;
         registerListeners();
-        cropTrackingService.start(activeTrackingSettings);
+        cropTrackingService.start(activeTrackingSettings, activeBackpressure, activeTelemetry);
     }
 
     private void registerListeners() {
@@ -199,6 +210,8 @@ public class AutoHarvest extends FarmerModule {
                 configFile = snapshot.config();
                 optimizationSettings = snapshot.optimization();
                 configuredTrackingSettings = snapshot.tracking();
+                configuredBackpressure = snapshot.backpressure();
+                configuredTelemetry = snapshot.telemetry();
             }
             return true;
         }
@@ -252,10 +265,13 @@ public class AutoHarvest extends FarmerModule {
         checkStock = configFile.isCheckStock();
         customPerm = configFile.getCustomPerm();
         setDefaultState(configFile.isDefaultStatus());
-        optimizedHarvestQueue.configure(optimizationSettings);
-        activeTrackingSettings = optimizationSettings.enabled()
-                ? configuredTrackingSettings
-                : TrackingSettings.baseline();
+        boolean configuredOptimization = optimizationSettings.enabled();
+        OptimizationSettings activeQueueSettings = configuredOptimization
+                ? optimizationSettings : OptimizationSettings.baseline();
+        activeTrackingSettings = configuredOptimization ? configuredTrackingSettings : TrackingSettings.baseline();
+        activeBackpressure = configuredOptimization ? configuredBackpressure : BackpressureSettings.BASELINE;
+        activeTelemetry = configuredOptimization ? configuredTelemetry : TelemetrySettings.DISABLED;
+        optimizedHarvestQueue.configure(activeQueueSettings, activeBackpressure, activeTelemetry);
     }
 
     private Set<XMaterial> parseCrops(List<String> configuredCrops) {
@@ -281,8 +297,8 @@ public class AutoHarvest extends FarmerModule {
     }
 
     /**
-     * Schedules one validated crop action. When optimize-module is off this
-     * preserves the normal one-tick region delay.
+     * Schedules one validated crop action through the globally bounded queue.
+     * Overflow is reconciled later and never becomes a direct scheduler flood.
      */
     public void scheduleHarvest(@NotNull Location location, @NotNull Runnable action) {
         OptimizedHarvestQueue.SubmitResult result = optimizedHarvestQueue.submit(
@@ -291,16 +307,9 @@ public class AutoHarvest extends FarmerModule {
                 || result == OptimizedHarvestQueue.SubmitResult.COALESCED) {
             return;
         }
-        try {
-            Bukkit.getRegionScheduler().runDelayed(Main.getInstance(), location.clone(), ignored -> action.run(), 1L);
-        }
-        catch (RuntimeException exception) {
-            long now = System.nanoTime();
-            long next = nextScheduleFailureNanos.get();
-            if (now >= next && nextScheduleFailureNanos.compareAndSet(next, now + 5_000_000_000L)) {
-                Main.getInstance().getLogger().log(Level.WARNING,
-                        "AutoHarvest could not schedule a validated region harvest.", exception);
-            }
+        CropTrackingService tracker = cropTrackingService;
+        if (result == OptimizedHarvestQueue.SubmitResult.DEFERRED && tracker != null && active) {
+            tracker.requestReconciliation(location);
         }
     }
 
@@ -358,6 +367,10 @@ public class AutoHarvest extends FarmerModule {
 
     public OptimizationSettings getOptimizationSettings() {
         return optimizationSettings;
+    }
+
+    public TrackingSettings getActiveTrackingSettings() {
+        return activeTrackingSettings;
     }
 
     public long getLifecycleGeneration() {
