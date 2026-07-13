@@ -1,7 +1,9 @@
 package xyz.geik.farmer.modules.autoharvest.handlers;
 
+import org.bukkit.ChunkSnapshot;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.inventory.ItemStack;
@@ -40,7 +42,7 @@ public final class CropHarvesting {
         return isAgeableCrop(material) || isBlockCrop(material);
     }
 
-    static boolean isHarvestableGrowth(@NotNull BlockData data, @NotNull XMaterial material) {
+    public static boolean isHarvestableGrowth(@NotNull BlockData data, @NotNull XMaterial material) {
         if (isBlockCrop(material)) {
             return true;
         }
@@ -51,7 +53,31 @@ public final class CropHarvesting {
 
     static boolean isStillHarvestable(@NotNull Block block, @NotNull XMaterial expectedMaterial) {
         XMaterial current = normalize(XMaterial.matchXMaterial(block.getType()));
-        return current == expectedMaterial && isHarvestableGrowth(block.getBlockData(), current);
+        if (current != expectedMaterial || !isHarvestableGrowth(block.getBlockData(), current)) {
+            return false;
+        }
+        return !isStackCrop(current)
+                || (block.getRelative(BlockFace.DOWN).getType() == block.getType()
+                && block.getRelative(BlockFace.UP).getType() != block.getType());
+    }
+
+    public static boolean isSnapshotHarvestable(
+            @NotNull ChunkSnapshot snapshot,
+            int x,
+            int y,
+            int z,
+            @NotNull XMaterial material,
+            int minimumY,
+            int maximumY
+    ) {
+        if (!isHarvestableGrowth(snapshot.getBlockData(x, y, z), material)) {
+            return false;
+        }
+        return !isStackCrop(material)
+                || (y > minimumY
+                && snapshot.getBlockType(x, y - 1, z) == snapshot.getBlockType(x, y, z)
+                && (y + 1 >= maximumY
+                || snapshot.getBlockType(x, y + 1, z) != snapshot.getBlockType(x, y, z)));
     }
 
     static @NotNull List<ItemStack> snapshotDrops(@NotNull Block block) {
@@ -95,6 +121,10 @@ public final class CropHarvesting {
                     "CHORUS_FLOWER", "CHORUS_PLANT" -> true;
             default -> false;
         };
+    }
+
+    private static boolean isStackCrop(@NotNull XMaterial material) {
+        return material == XMaterial.SUGAR_CANE || material == XMaterial.CACTUS;
     }
 
     static boolean isAgeableCrop(@NotNull XMaterial material) {

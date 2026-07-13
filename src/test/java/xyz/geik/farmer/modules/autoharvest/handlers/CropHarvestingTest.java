@@ -4,6 +4,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.inventory.ItemStack;
@@ -94,5 +95,23 @@ class CropHarvestingTest {
         assertTrue(CropHarvesting.harvest(block, XMaterial.MELON_SLICE, List.of(slices)));
         verify(block).setType(Material.AIR, false);
         verify(world).dropItemNaturally(location, slices);
+    }
+
+    @Test
+    void onlyTheTopOfAStackingCropIsHarvestable() {
+        Block cane = mock(Block.class);
+        Block below = mock(Block.class);
+        Block above = mock(Block.class);
+        BlockData data = mock(BlockData.class);
+
+        when(cane.getType()).thenReturn(Material.SUGAR_CANE);
+        when(cane.getBlockData()).thenReturn(data);
+        when(cane.getRelative(BlockFace.DOWN)).thenReturn(below);
+        when(cane.getRelative(BlockFace.UP)).thenReturn(above);
+        when(below.getType()).thenReturn(Material.SUGAR_CANE);
+        when(above.getType()).thenReturn(Material.SUGAR_CANE, Material.AIR);
+
+        assertFalse(CropHarvesting.isStillHarvestable(cane, XMaterial.SUGAR_CANE));
+        assertTrue(CropHarvesting.isStillHarvestable(cane, XMaterial.SUGAR_CANE));
     }
 }

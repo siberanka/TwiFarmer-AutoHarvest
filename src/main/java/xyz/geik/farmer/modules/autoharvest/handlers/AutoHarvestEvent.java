@@ -7,6 +7,7 @@ import org.bukkit.block.BlockState;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockFertilizeEvent;
 import org.bukkit.event.block.BlockGrowEvent;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
@@ -44,12 +45,21 @@ public class AutoHarvestEvent implements Listener {
      */
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onHarvestGrowEvent(@NotNull BlockGrowEvent event) {
+        scheduleIfMature(event.getNewState());
+    }
+
+    @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
+    public void onHarvestFertilizeEvent(@NotNull BlockFertilizeEvent event) {
+        for (BlockState state : event.getBlocks()) {
+            scheduleIfMature(state);
+        }
+    }
+
+    private void scheduleIfMature(@NotNull BlockState newState) {
         AutoHarvest module = AutoHarvest.getInstance();
         if (module == null) {
             return;
         }
-
-        BlockState newState = event.getNewState();
         XMaterial material = CropHarvesting.normalize(XMaterial.matchXMaterial(newState.getType()));
         if (!AutoHarvest.checkCrop(material)
                 || !CropHarvesting.isHarvestableGrowth(newState.getBlockData(), material)
@@ -57,7 +67,14 @@ public class AutoHarvestEvent implements Listener {
             return;
         }
 
-        Location location = newState.getLocation();
+        scheduleCandidate(newState.getLocation(), material);
+    }
+
+    public void scheduleCandidate(@NotNull Location location, @NotNull XMaterial material) {
+        AutoHarvest module = AutoHarvest.getInstance();
+        if (module == null || !AutoHarvest.checkCrop(material)) {
+            return;
+        }
         long generation = module.getLifecycleGeneration();
         module.scheduleHarvest(location, () -> harvestIfEligible(location, material, generation));
     }

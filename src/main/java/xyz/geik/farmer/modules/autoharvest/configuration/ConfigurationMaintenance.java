@@ -41,6 +41,7 @@ public final class ConfigurationMaintenance {
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmssSSS");
     private static final String OPTIMIZE_MODULE = "optimize-module";
     private static final String QUEUE = OPTIMIZE_MODULE + ".queue";
+    private static final String TRACKING = OPTIMIZE_MODULE + ".tracking";
 
     private ConfigurationMaintenance() {
     }
@@ -69,6 +70,7 @@ public final class ConfigurationMaintenance {
         return new ConfigSnapshot(
                 ConfigFile.from(loaded.configuration),
                 readOptimizationSettings(loaded.configuration),
+                readTrackingSettings(loaded.configuration),
                 changed
         );
     }
@@ -99,7 +101,7 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= repairInteger(configuration, defaults, "config-version", 2, 2);
+        changed |= repairInteger(configuration, defaults, "config-version", 3, 3);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -111,12 +113,21 @@ public final class ConfigurationMaintenance {
 
         changed |= ensureSection(configuration, OPTIMIZE_MODULE);
         changed |= ensureSection(configuration, QUEUE);
+        changed |= ensureSection(configuration, TRACKING);
         changed |= repairBoolean(configuration, defaults, OPTIMIZE_MODULE + ".enable");
         changed |= repairInteger(configuration, defaults, QUEUE + ".initial-delay-ticks", 1, 20);
         changed |= repairInteger(configuration, defaults, QUEUE + ".continuation-delay-ticks", 1, 20);
         changed |= repairInteger(configuration, defaults, QUEUE + ".max-jobs-per-run", 1, 512);
         changed |= repairInteger(configuration, defaults, QUEUE + ".max-pending-jobs", 64, 65_536);
         changed |= repairBoolean(configuration, defaults, QUEUE + ".coalesce-duplicates");
+        changed |= repairInteger(configuration, defaults, TRACKING + ".reconcile-interval-ticks", 20, 72_000);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-chunks-per-cycle", 1, 128);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-tracked-chunks", 64, 65_536);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-concurrent-scans", 1, 32);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-pending-scans", 64, 65_536);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".max-candidates-per-scan", 16, 4_096);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".purchase-radius-chunks", 1, 32);
+        changed |= repairInteger(configuration, defaults, TRACKING + ".bootstrap-radius-chunks", 1, 16);
 
         if (!configuration.getBoolean("requirePiston") && configuration.getBoolean("checkAllDirections")) {
             configuration.set("checkAllDirections", false);
@@ -243,6 +254,19 @@ public final class ConfigurationMaintenance {
         );
     }
 
+    private static TrackingSettings readTrackingSettings(YamlConfiguration configuration) {
+        return new TrackingSettings(
+                configuration.getInt(TRACKING + ".reconcile-interval-ticks"),
+                configuration.getInt(TRACKING + ".max-chunks-per-cycle"),
+                configuration.getInt(TRACKING + ".max-tracked-chunks"),
+                configuration.getInt(TRACKING + ".max-concurrent-scans"),
+                configuration.getInt(TRACKING + ".max-pending-scans"),
+                configuration.getInt(TRACKING + ".max-candidates-per-scan"),
+                configuration.getInt(TRACKING + ".purchase-radius-chunks"),
+                configuration.getInt(TRACKING + ".bootstrap-radius-chunks")
+        );
+    }
+
     private static boolean isValidPermission(String value) {
         return value.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}");
     }
@@ -357,6 +381,7 @@ public final class ConfigurationMaintenance {
     public record ConfigSnapshot(
             @NotNull ConfigFile config,
             @NotNull OptimizationSettings optimization,
+            @NotNull TrackingSettings tracking,
             boolean repaired
     ) {
     }

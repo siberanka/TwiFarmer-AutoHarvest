@@ -2,6 +2,8 @@ package xyz.geik.farmer.modules.autoharvest;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
 import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.Main;
@@ -9,11 +11,13 @@ import xyz.geik.farmer.modules.FarmerModule;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigFile;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigurationMaintenance;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
+import xyz.geik.farmer.modules.autoharvest.configuration.TrackingSettings;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestGuiCreateEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.CropHarvesting;
 import xyz.geik.farmer.modules.autoharvest.optimization.OptimizedHarvestQueue;
 import xyz.geik.farmer.modules.autoharvest.platform.PaperPlatform;
+import xyz.geik.farmer.modules.autoharvest.tracking.CropTrackingService;
 import xyz.geik.glib.GLib;
 import xyz.geik.glib.chat.ChatUtils;
 import xyz.geik.glib.shades.xseries.XMaterial;
@@ -22,9 +26,11 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
@@ -42,10 +48,12 @@ public class AutoHarvest extends FarmerModule {
     private static volatile AutoHarvest instance;
 
     private final AtomicLong lifecycleGeneration = new AtomicLong();
+    private final AtomicLong nextScheduleFailureNanos = new AtomicLong();
     private final OptimizedHarvestQueue optimizedHarvestQueue = new OptimizedHarvestQueue();
 
     private AutoHarvestEvent autoHarvestEvent;
     private AutoHarvestGuiCreateEvent autoHarvestGuiCreateEvent;
+    private CropTrackingService cropTrackingService;
 
     private volatile boolean requirePiston;
     private volatile boolean checkAllDirections;
@@ -55,7 +63,10 @@ public class AutoHarvest extends FarmerModule {
 
     private volatile String customPerm = "farmer.autoharvest";
     private volatile Set<XMaterial> crops = Collections.emptySet();
+    private volatile Map<Material, XMaterial> cropMaterials = Collections.emptyMap();
     private volatile OptimizationSettings optimizationSettings = OptimizationSettings.disabled();
+    private volatile TrackingSettings configuredTrackingSettings = TrackingSettings.baseline();
+    private volatile TrackingSettings activeTrackingSettings = TrackingSettings.baseline();
 
     private ConfigFile configFile;
 
@@ -121,7 +132,10 @@ public class AutoHarvest extends FarmerModule {
         optimizedHarvestQueue.configure(OptimizationSettings.disabled());
         unregisterListeners();
         crops = Collections.emptySet();
+        cropMaterials = Collections.emptyMap();
         optimizationSettings = OptimizationSettings.disabled();
+        configuredTrackingSettings = TrackingSettings.baseline();
+        activeTrackingSettings = TrackingSettings.baseline();
         if (instance == this) {
             instance = null;
         }
@@ -129,15 +143,20 @@ public class AutoHarvest extends FarmerModule {
 
     private void activateRuntime() {
         applyConfiguration();
-        registerListeners();
         setHasGui(true);
         active = true;
+        registerListeners();
+        cropTrackingService.start(activeTrackingSettings);
     }
 
     private void registerListeners() {
         if (autoHarvestEvent == null) {
             autoHarvestEvent = new AutoHarvestEvent();
             Bukkit.getPluginManager().registerEvents(autoHarvestEvent, Main.getInstance());
+        }
+        if (cropTrackingService == null) {
+            cropTrackingService = new CropTrackingService(this, autoHarvestEvent);
+            Bukkit.getPluginManager().registerEvents(cropTrackingService, Main.getInstance());
         }
         if (autoHarvestGuiCreateEvent == null) {
             autoHarvestGuiCreateEvent = new AutoHarvestGuiCreateEvent();
@@ -148,6 +167,11 @@ public class AutoHarvest extends FarmerModule {
     private void unregisterListeners() {
         active = false;
         setHasGui(false);
+        if (cropTrackingService != null) {
+            cropTrackingService.stop();
+            HandlerList.unregisterAll(cropTrackingService);
+            cropTrackingService = null;
+        }
         if (autoHarvestEvent != null) {
             HandlerList.unregisterAll(autoHarvestEvent);
             autoHarvestEvent = null;
@@ -174,6 +198,7 @@ public class AutoHarvest extends FarmerModule {
                 );
                 configFile = snapshot.config();
                 optimizationSettings = snapshot.optimization();
+                configuredTrackingSettings = snapshot.tracking();
             }
             return true;
         }
@@ -220,6 +245,7 @@ public class AutoHarvest extends FarmerModule {
 
     private void applyConfiguration() {
         crops = parseCrops(configFile.getItems());
+        cropMaterials = mapCropMaterials(crops);
         requirePiston = configFile.isRequirePiston();
         checkAllDirections = configFile.isCheckAllDirections();
         withoutFarmer = configFile.isWithoutFarmer();
@@ -227,6 +253,9 @@ public class AutoHarvest extends FarmerModule {
         customPerm = configFile.getCustomPerm();
         setDefaultState(configFile.isDefaultStatus());
         optimizedHarvestQueue.configure(optimizationSettings);
+        activeTrackingSettings = optimizationSettings.enabled()
+                ? configuredTrackingSettings
+                : TrackingSettings.baseline();
     }
 
     private Set<XMaterial> parseCrops(List<String> configuredCrops) {
@@ -240,6 +269,17 @@ public class AutoHarvest extends FarmerModule {
         return parsed.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(parsed);
     }
 
+    private Map<Material, XMaterial> mapCropMaterials(Set<XMaterial> configuredCrops) {
+        EnumMap<Material, XMaterial> mapped = new EnumMap<>(Material.class);
+        for (Material material : Material.values()) {
+            XMaterial normalized = CropHarvesting.normalize(XMaterial.matchXMaterial(material));
+            if (configuredCrops.contains(normalized)) {
+                mapped.put(material, normalized);
+            }
+        }
+        return mapped.isEmpty() ? Collections.emptyMap() : Collections.unmodifiableMap(mapped);
+    }
+
     /**
      * Schedules one validated crop action. When optimize-module is off this
      * preserves the normal one-tick region delay.
@@ -251,12 +291,33 @@ public class AutoHarvest extends FarmerModule {
                 || result == OptimizedHarvestQueue.SubmitResult.COALESCED) {
             return;
         }
-        Bukkit.getRegionScheduler().runDelayed(Main.getInstance(), location.clone(), ignored -> action.run(), 1L);
+        try {
+            Bukkit.getRegionScheduler().runDelayed(Main.getInstance(), location.clone(), ignored -> action.run(), 1L);
+        }
+        catch (RuntimeException exception) {
+            long now = System.nanoTime();
+            long next = nextScheduleFailureNanos.get();
+            if (now >= next && nextScheduleFailureNanos.compareAndSet(next, now + 5_000_000_000L)) {
+                Main.getInstance().getLogger().log(Level.WARNING,
+                        "AutoHarvest could not schedule a validated region harvest.", exception);
+            }
+        }
     }
 
     public static boolean checkCrop(XMaterial material) {
         AutoHarvest module = instance;
         return module != null && module.active && module.crops.contains(material);
+    }
+
+    public XMaterial resolveCrop(@NotNull Material material) {
+        return cropMaterials.get(material);
+    }
+
+    public void scanAround(@NotNull Player player) {
+        CropTrackingService tracker = cropTrackingService;
+        if (tracker != null && active) {
+            tracker.scanAround(player, activeTrackingSettings.purchaseRadiusChunks());
+        }
     }
 
     public static AutoHarvest getInstance() {
@@ -285,6 +346,10 @@ public class AutoHarvest extends FarmerModule {
 
     public Set<XMaterial> getCrops() {
         return crops;
+    }
+
+    public Map<Material, XMaterial> getCropMaterials() {
+        return cropMaterials;
     }
 
     public ConfigFile getConfigFile() {

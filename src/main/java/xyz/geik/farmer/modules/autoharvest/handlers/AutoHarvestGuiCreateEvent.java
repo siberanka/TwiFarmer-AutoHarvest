@@ -58,8 +58,11 @@ public class AutoHarvestGuiCreateEvent implements Listener {
                                         return true;
                                     // Change attribute
                                     synchronized (e.getFarmer()) {
-                                        e.getFarmer().changeAttribute("autoharvest");
+                                        boolean enabled = e.getFarmer().changeAttribute("autoharvest");
                                         e.getGui().draw();
+                                        if (enabled) {
+                                            AutoHarvest.getInstance().scanAround(e.getPlayer());
+                                        }
                                     }
                                     return true;
                                 })

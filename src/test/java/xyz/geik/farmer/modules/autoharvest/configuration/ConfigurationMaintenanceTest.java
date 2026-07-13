@@ -62,6 +62,8 @@ class ConfigurationMaintenanceTest {
         assertFalse(snapshot.config().isStatus());
         assertFalse(snapshot.optimization().enabled());
         assertEquals(32, snapshot.optimization().maxJobsPerRun());
+        assertEquals(2, snapshot.tracking().maxConcurrentScans());
+        assertEquals(512, snapshot.tracking().maxCandidatesPerScan());
         assertEquals(List.of("WHEAT", "CARROT", "POTATO", "PUMPKIN"), snapshot.config().getItems());
     }
 
@@ -104,6 +106,9 @@ class ConfigurationMaintenanceTest {
         assertEquals(32, repaired.getInt("optimize-module.queue.max-jobs-per-run"));
         assertEquals(4096, repaired.getInt("optimize-module.queue.max-pending-jobs"));
         assertTrue(repaired.getBoolean("optimize-module.queue.coalesce-duplicates"));
+        assertEquals(100, repaired.getInt("optimize-module.tracking.reconcile-interval-ticks"));
+        assertEquals(4096, repaired.getInt("optimize-module.tracking.max-pending-scans"));
+        assertEquals(3, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 

@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 2
+config-version: 3
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -31,7 +31,8 @@ items:
   - "POTATO"
   - "PUMPKIN"
 
-# Optional production-focused queue. Every setting below is ignored while enable is false.
+# Optional production tuning. Configured child values are ignored while enable is false.
+# A fixed conservative tracking baseline remains active so mature crops are never event-only.
 # Bukkit world access remains on Paper's owning region thread; no world mutation is async.
 optimize-module:
   enable: false
@@ -46,3 +47,20 @@ optimize-module:
     max-pending-jobs: 4096
     # Merges repeated growth events for the same block while a job is pending.
     coalesce-duplicates: true
+  tracking:
+    # Rescan interval for chunks known to contain configured crops.
+    reconcile-interval-ticks: 100
+    # Active crop chunks added back to the scan queue per interval.
+    max-chunks-per-cycle: 2
+    # Memory bound for chunks known to contain configured crops.
+    max-tracked-chunks: 8192
+    # Maximum snapshot analyses running at the same time.
+    max-concurrent-scans: 2
+    # Bound for coalesced chunk scan requests.
+    max-pending-scans: 4096
+    # Mature crops submitted from one snapshot; later scans collect the rest.
+    max-candidates-per-scan: 512
+    # Loaded chunk radius reconciled immediately after a Farmer is purchased.
+    purchase-radius-chunks: 8
+    # Loaded chunk radius reconciled for online players after enable/reload.
+    bootstrap-radius-chunks: 3
