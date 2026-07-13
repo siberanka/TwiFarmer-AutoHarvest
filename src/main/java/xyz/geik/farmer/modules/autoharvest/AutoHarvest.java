@@ -12,6 +12,7 @@ import xyz.geik.farmer.modules.autoharvest.configuration.ConfigFile;
 import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigurationMaintenance;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
+import xyz.geik.farmer.modules.autoharvest.configuration.StackedCropSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TrackingSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.UpdateSettings;
@@ -66,7 +67,10 @@ public class AutoHarvest extends FarmerModule {
 
     private volatile String customPerm = "farmer.autoharvest";
     private volatile Set<XMaterial> crops = Collections.emptySet();
+    private volatile Set<XMaterial> stackedCrops = Collections.emptySet();
     private volatile Map<Material, XMaterial> cropMaterials = Collections.emptyMap();
+    private volatile int maxStackedSegmentsPerHarvest = 32;
+    private volatile StackedCropSettings stackedCropSettings = StackedCropSettings.disabled();
     private volatile OptimizationSettings optimizationSettings = OptimizationSettings.DEFAULT;
     private volatile TrackingSettings configuredTrackingSettings = TrackingSettings.baseline();
     private volatile TrackingSettings activeTrackingSettings = TrackingSettings.baseline();
@@ -152,7 +156,10 @@ public class AutoHarvest extends FarmerModule {
                 BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
         unregisterListeners();
         crops = Collections.emptySet();
+        stackedCrops = Collections.emptySet();
         cropMaterials = Collections.emptyMap();
+        maxStackedSegmentsPerHarvest = 32;
+        stackedCropSettings = StackedCropSettings.disabled();
         optimizationSettings = OptimizationSettings.DEFAULT;
         configuredTrackingSettings = TrackingSettings.baseline();
         activeTrackingSettings = TrackingSettings.baseline();
@@ -239,6 +246,7 @@ public class AutoHarvest extends FarmerModule {
                         Main.getInstance().getLogger()
                 );
                 configFile = snapshot.config();
+                stackedCropSettings = snapshot.stackedCrops();
                 optimizationSettings = snapshot.optimization();
                 configuredTrackingSettings = snapshot.tracking();
                 configuredBackpressure = snapshot.backpressure();
@@ -325,8 +333,15 @@ public class AutoHarvest extends FarmerModule {
     }
 
     private void applyConfiguration() {
-        crops = parseCrops(configFile.getItems());
+        Set<XMaterial> configuredCrops = parseCrops(configFile.getItems());
+        stackedCrops = stackedCropSettings.enabled()
+                ? parseStackedCrops(stackedCropSettings.items()) : Collections.emptySet();
+        EnumSet<XMaterial> allCrops = EnumSet.noneOf(XMaterial.class);
+        allCrops.addAll(configuredCrops);
+        allCrops.addAll(stackedCrops);
+        crops = allCrops.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(allCrops);
         cropMaterials = CropHarvesting.configuredBlockMaterials(crops);
+        maxStackedSegmentsPerHarvest = stackedCropSettings.maxSegmentsPerHarvest();
         requirePiston = configFile.isRequirePiston();
         checkAllDirections = configFile.isCheckAllDirections();
         withoutFarmer = configFile.isWithoutFarmer();
@@ -348,6 +363,17 @@ public class AutoHarvest extends FarmerModule {
             XMaterial.matchXMaterial(crop)
                     .map(CropHarvesting::normalize)
                     .filter(CropHarvesting::isSupportedCrop)
+                    .ifPresent(parsed::add);
+        }
+        return parsed.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(parsed);
+    }
+
+    private Set<XMaterial> parseStackedCrops(List<String> configuredCrops) {
+        EnumSet<XMaterial> parsed = EnumSet.noneOf(XMaterial.class);
+        for (String crop : configuredCrops) {
+            XMaterial.matchXMaterial(crop)
+                    .map(CropHarvesting::normalize)
+                    .filter(CropHarvesting::isStackCrop)
                     .ifPresent(parsed::add);
         }
         return parsed.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(parsed);
@@ -412,6 +438,14 @@ public class AutoHarvest extends FarmerModule {
 
     public Set<XMaterial> getCrops() {
         return crops;
+    }
+
+    public boolean isStackedCropEnabled(@NotNull XMaterial material) {
+        return stackedCrops.contains(material);
+    }
+
+    public int getMaxStackedSegmentsPerHarvest() {
+        return maxStackedSegmentsPerHarvest;
     }
 
     public Map<Material, XMaterial> getCropMaterials() {

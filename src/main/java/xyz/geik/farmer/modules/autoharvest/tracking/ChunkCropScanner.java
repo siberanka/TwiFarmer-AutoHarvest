@@ -32,11 +32,12 @@ public final class ChunkCropScanner {
 
         int checked = 0;
         while (cursor.y >= cursor.minimumY && checked < maximumBlockChecks) {
-            int section = Math.floorDiv(cursor.y, 16);
-            if (section != cursor.currentSection) {
-                cursor.currentSection = section;
-                if (snapshot.isSectionEmpty(section)) {
-                    cursor.y = Math.max(cursor.minimumY - 1, section * 16 - 1);
+            int sectionY = Math.floorDiv(cursor.y, 16);
+            if (sectionY != cursor.currentSection) {
+                cursor.currentSection = sectionY;
+                int sectionIndex = sectionY - cursor.minimumSectionY;
+                if (snapshot.isSectionEmpty(sectionIndex)) {
+                    cursor.y = Math.max(cursor.minimumY - 1, sectionY * 16 - 1);
                     cursor.x = 0;
                     cursor.z = 0;
                     continue;
@@ -123,6 +124,7 @@ public final class ChunkCropScanner {
 
     public static final class ScanCursor {
         private final int minimumY;
+        private final int minimumSectionY;
         private final int maximumY;
         private final int maximumCandidates;
         private final List<CropCandidate> candidates;
@@ -143,6 +145,7 @@ public final class ChunkCropScanner {
                 throw new IllegalArgumentException("maximumCandidates must be positive");
             }
             this.minimumY = minimumY;
+            this.minimumSectionY = Math.floorDiv(minimumY, 16);
             this.maximumY = maximumY;
             this.maximumCandidates = maximumCandidates;
             this.candidates = new ArrayList<>(Math.min(maximumCandidates, 64));

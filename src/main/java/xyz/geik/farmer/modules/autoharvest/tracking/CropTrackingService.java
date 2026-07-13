@@ -51,6 +51,7 @@ import java.util.logging.Level;
 public final class CropTrackingService implements Listener {
 
     private static final long SECOND_NANOS = 1_000_000_000L;
+    private static final long PLAYER_JOIN_SCAN_DELAY_TICKS = 40L;
 
     private final AutoHarvest module;
     private final AutoHarvestEvent harvestHandler;
@@ -208,7 +209,8 @@ public final class CropTrackingService implements Listener {
     @EventHandler
     public void onPlayerJoin(@NotNull PlayerJoinEvent event) {
         if (settings.scanOnPlayerJoin()) {
-            schedulePlayerScan(event.getPlayer(), settings.bootstrapRadiusChunks(), false);
+            schedulePlayerScan(event.getPlayer(), settings.bootstrapRadiusChunks(), false,
+                    PLAYER_JOIN_SCAN_DELAY_TICKS);
         }
     }
 
@@ -248,6 +250,9 @@ public final class CropTrackingService implements Listener {
                 visibleChunks.add(new ChunkCoordinate(chunkX, chunkZ));
             }
         }
+        if (visibleChunks.isEmpty() && world.isChunkLoaded(centerX, centerZ)) {
+            visibleChunks.add(new ChunkCoordinate(centerX, centerZ));
+        }
         visibleChunks.sort(Comparator.comparingInt(chunk ->
                 Math.max(Math.abs(chunk.x() - centerX), Math.abs(chunk.z() - centerZ))));
         for (ChunkCoordinate chunk : visibleChunks) {
@@ -261,6 +266,11 @@ public final class CropTrackingService implements Listener {
 
     private void schedulePlayerScan(Player player, int radius, boolean farmerScoped) {
         player.getScheduler().run(plugin, ignored -> scanAround(player, radius, farmerScoped), null);
+    }
+
+    private void schedulePlayerScan(Player player, int radius, boolean farmerScoped, long delayTicks) {
+        player.getScheduler().runDelayed(plugin,
+                ignored -> scanAround(player, radius, farmerScoped), null, delayTicks);
     }
 
     private void tick(long generation) {
@@ -347,6 +357,7 @@ public final class CropTrackingService implements Listener {
                         });
             }
             catch (RuntimeException exception) {
+                retainForReconciliation(key);
                 finishScan(key);
                 logFailure("could not schedule a chunk snapshot", exception);
             }
@@ -369,6 +380,7 @@ public final class CropTrackingService implements Listener {
             scheduleTick(1L);
         }
         catch (RuntimeException exception) {
+            retainForReconciliation(key);
             finishScan(key);
             logFailure("could not capture a chunk snapshot", exception);
         }
@@ -392,6 +404,7 @@ public final class CropTrackingService implements Listener {
             }
             catch (RuntimeException exception) {
                 blockPermits.addAndGet(granted);
+                retainForReconciliation(work.key());
                 finishScan(work.key());
                 logFailure("could not schedule an asynchronous scan slice", exception);
             }
@@ -420,6 +433,7 @@ public final class CropTrackingService implements Listener {
             }
         }
         catch (RuntimeException exception) {
+            retainForReconciliation(work.key());
             finishScan(work.key());
             logFailure("rejected an asynchronous crop snapshot slice", exception);
         }
@@ -514,6 +528,12 @@ public final class CropTrackingService implements Listener {
 
     private void untrack(ChunkKey key) {
         trackedChunks.remove(key);
+    }
+
+    private void retainForReconciliation(ChunkKey key) {
+        if (running && !settings.reconcilesLoadedChunks()) {
+            track(key);
+        }
     }
 
     private boolean trackingLocationAllowed(Location location, TrackingSettings current) {

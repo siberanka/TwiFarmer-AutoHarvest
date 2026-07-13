@@ -139,6 +139,11 @@ public class AutoHarvestEvent implements Listener {
     }
 
     private void harvest(@NotNull Block block, @NotNull XMaterial material) {
+        AutoHarvest module = AutoHarvest.getInstance();
+        if (module != null && module.isStackedCropEnabled(material)) {
+            CropHarvesting.harvestStacked(block, material, module.getMaxStackedSegmentsPerHarvest());
+            return;
+        }
         List<ItemStack> drops = CropHarvesting.snapshotDrops(block);
         if (drops.isEmpty()) {
             ItemStack fallback = material.parseItem();
@@ -170,6 +175,17 @@ public class AutoHarvestEvent implements Listener {
     private boolean hasStock(@NotNull Farmer farmer, @NotNull XMaterial material) {
         AutoHarvest module = AutoHarvest.getInstance();
         if (module == null || !module.isCheckStock() || farmer.getAttributeStatus("autoseller")) {
+            return true;
+        }
+
+        ItemStack harvestedItem = material.parseItem();
+        if (harvestedItem == null) {
+            return false;
+        }
+        // Farmer only has a stock slot for materials declared by the host's
+        // items.yml. Unmanaged crops must remain natural world drops instead
+        // of being permanently blocked by a stock check they cannot satisfy.
+        if (!FarmerInv.checkMaterial(harvestedItem)) {
             return true;
         }
 

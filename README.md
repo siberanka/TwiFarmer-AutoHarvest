@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.2.6.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.3.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -100,6 +100,8 @@ Adaptive backpressure uses Paper's rolling MSPT with hysteresis. It also observe
 
 The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or reconciliation is due.
 
+Snapshot section indexes are translated relative to the world's minimum build height. Worlds using negative Y values, including the standard `-64..320` range on Leaf, therefore scan every section without accessing a negative snapshot index. A failed initial discovery is retained in the bounded reconciliation registry so a transient capture or async scan failure cannot permanently hide an already mature crop chunk.
+
 ## Crop Tracking
 
 - `EVENT_DRIVEN` is the default. Growth/fertilize signals harvest immediately, while only known crop or deferred chunks receive slow reconciliation.
@@ -109,12 +111,29 @@ The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed 
 - With `farmer-regions-only: true`, event and player bootstrap tracking is accepted only around an enabled Farmer (or when `withoutFarmer` is active). Set it to `false` if periodic mode must discover chunk-loader farms with no nearby player.
 - Farmer purchase and GUI enable scans are nearest-first and inspect only chunks already sent to the player. Chunk unload, module reload, and disable remove or invalidate queued state.
 
+## Stacked Crops
+
+`stacked-crops` is independent from the ordinary `items` list. It discovers one top candidate per column, finds the base on the owning region thread, preserves that base, and removes every validated segment above it as one globally budgeted harvest job.
+
+```yaml
+stacked-crops:
+  enable: true
+  items:
+    - "SUGAR_CANE"
+    - "CACTUS"
+    - "BAMBOO"
+    - "KELP"
+  max-segments-per-harvest: 32
+```
+
+Each supported column crop can be added or removed independently. `KELP` treats `KELP` and `KELP_PLANT` blocks as one column. The segment limit is validated between 1 and 256; a taller or malformed column is rejected without partial mutation. If a listed crop is absent from Farmer's host-level `items.yml`, it is harvested as natural world drops rather than being incorrectly blocked by `checkStock`.
+
 ## Harvest Guarantees
 
 - Mature crops are revalidated after growth before any drop or block mutation.
 - Snapshot candidates are revalidated against the live block and current Farmer ownership before harvesting.
 - Ageable crops are reset only after real mature-block drops are captured.
-- Sugar cane and cactus preserve their base and only remove the current top segment.
+- Stacked crops preserve their base and remove each validated segment above it exactly once.
 - Stale or duplicate jobs cannot harvest a crop that is no longer mature.
 - Farmer-linked operations revalidate ownership, module state, piston requirements, and stock before execution.
 - Module-triggered Farmer inventory paths are serialized per Farmer to avoid Folia region races.

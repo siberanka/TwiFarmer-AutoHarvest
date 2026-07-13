@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 5
+config-version: 6
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -30,6 +30,18 @@ items:
   - "CARROT"
   - "POTATO"
   - "PUMPKIN"
+
+# Harvests upward-growing columns as one bounded job while preserving the base.
+# Add or remove each supported crop independently: SUGAR_CANE, CACTUS, BAMBOO, KELP.
+stacked-crops:
+  enable: true
+  items:
+    - "SUGAR_CANE"
+    - "CACTUS"
+    - "BAMBOO"
+    - "KELP"
+  # Rejects taller columns without partially breaking them.
+  max-segments-per-harvest: 32
 
 # Checks this module's GitHub repository without blocking a server thread.
 update-checker:

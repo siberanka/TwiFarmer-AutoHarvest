@@ -14,6 +14,7 @@ import xyz.geik.glib.shades.xseries.XMaterial;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -132,5 +133,106 @@ class CropHarvestingTest {
 
         assertFalse(CropHarvesting.isStillHarvestable(cane, XMaterial.SUGAR_CANE));
         assertTrue(CropHarvesting.isStillHarvestable(cane, XMaterial.SUGAR_CANE));
+    }
+
+    @Test
+    void stackedHarvestPreservesTheBaseAndPaysEachRemovedSegmentOnce() {
+        Block top = statefulBlock(Material.BAMBOO);
+        Block middle = statefulBlock(Material.BAMBOO);
+        Block base = statefulBlock(Material.BAMBOO);
+        Block soil = statefulBlock(Material.DIRT);
+        Block air = statefulBlock(Material.AIR);
+        World world = mock(World.class);
+        Location topLocation = mock(Location.class);
+        Location middleLocation = mock(Location.class);
+        ItemStack topDrop = mock(ItemStack.class);
+        ItemStack middleDrop = mock(ItemStack.class);
+
+        when(top.getRelative(BlockFace.UP)).thenReturn(air);
+        when(top.getRelative(BlockFace.DOWN)).thenReturn(middle);
+        when(middle.getRelative(BlockFace.DOWN)).thenReturn(base);
+        when(base.getRelative(BlockFace.DOWN)).thenReturn(soil);
+        when(top.getDrops()).thenReturn(List.of(topDrop));
+        when(middle.getDrops()).thenReturn(List.of(middleDrop));
+        when(topDrop.getType()).thenReturn(Material.BAMBOO);
+        when(middleDrop.getType()).thenReturn(Material.BAMBOO);
+        when(topDrop.getAmount()).thenReturn(1);
+        when(middleDrop.getAmount()).thenReturn(1);
+        when(topDrop.clone()).thenReturn(topDrop);
+        when(middleDrop.clone()).thenReturn(middleDrop);
+        when(top.getWorld()).thenReturn(world);
+        when(middle.getWorld()).thenReturn(world);
+        when(top.getLocation()).thenReturn(topLocation);
+        when(middle.getLocation()).thenReturn(middleLocation);
+
+        assertTrue(CropHarvesting.harvestStacked(top, XMaterial.BAMBOO, 32));
+
+        verify(top).setType(Material.AIR, false);
+        verify(middle).setType(Material.AIR, false);
+        verify(base, never()).setType(Material.AIR, false);
+        verify(world).dropItemNaturally(topLocation, topDrop);
+        verify(world).dropItemNaturally(middleLocation, middleDrop);
+    }
+
+    @Test
+    void oversizedStackIsRejectedWithoutPartialMutation() {
+        Block top = statefulBlock(Material.SUGAR_CANE);
+        Block second = statefulBlock(Material.SUGAR_CANE);
+        Block third = statefulBlock(Material.SUGAR_CANE);
+        Block base = statefulBlock(Material.SUGAR_CANE);
+        Block soil = statefulBlock(Material.SAND);
+        Block air = statefulBlock(Material.AIR);
+
+        when(top.getRelative(BlockFace.UP)).thenReturn(air);
+        when(top.getRelative(BlockFace.DOWN)).thenReturn(second);
+        when(second.getRelative(BlockFace.DOWN)).thenReturn(third);
+        when(third.getRelative(BlockFace.DOWN)).thenReturn(base);
+        when(base.getRelative(BlockFace.DOWN)).thenReturn(soil);
+
+        assertFalse(CropHarvesting.harvestStacked(top, XMaterial.SUGAR_CANE, 2));
+        verify(top, never()).setType(Material.AIR, false);
+        verify(second, never()).setType(Material.AIR, false);
+        verify(third, never()).setType(Material.AIR, false);
+        verify(base, never()).setType(Material.AIR, false);
+    }
+
+    @Test
+    void kelpBaseIsRestoredToAGrowableTip() {
+        Block top = statefulBlock(Material.KELP);
+        Block base = statefulBlock(Material.KELP_PLANT);
+        Block soil = statefulBlock(Material.CLAY);
+        Block air = statefulBlock(Material.AIR);
+        World world = mock(World.class);
+        Location location = mock(Location.class);
+        ItemStack drop = mock(ItemStack.class);
+
+        when(top.getRelative(BlockFace.UP)).thenReturn(air);
+        when(top.getRelative(BlockFace.DOWN)).thenReturn(base);
+        when(base.getRelative(BlockFace.DOWN)).thenReturn(soil);
+        when(top.getDrops()).thenReturn(List.of(drop));
+        when(drop.getType()).thenReturn(Material.KELP);
+        when(drop.getAmount()).thenReturn(1);
+        when(drop.clone()).thenReturn(drop);
+        when(top.getWorld()).thenReturn(world);
+        when(top.getLocation()).thenReturn(location);
+
+        assertTrue(CropHarvesting.harvestStacked(top, XMaterial.KELP, 32));
+
+        verify(top).setType(Material.AIR, false);
+        verify(base).setType(Material.KELP, false);
+        verify(base, never()).setType(Material.AIR, false);
+        verify(world).dropItemNaturally(location, drop);
+    }
+
+    private Block statefulBlock(Material initialType) {
+        Block block = mock(Block.class);
+        AtomicReference<Material> type = new AtomicReference<>(initialType);
+        when(block.getType()).thenAnswer(ignored -> type.get());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            type.set(invocation.getArgument(0));
+            return null;
+        }).when(block).setType(org.mockito.ArgumentMatchers.any(Material.class),
+                org.mockito.ArgumentMatchers.anyBoolean());
+        return block;
     }
 }

@@ -66,6 +66,10 @@ class ConfigurationMaintenanceTest {
         assertEquals(1, snapshot.tracking().maxConcurrentScans());
         assertEquals(128, snapshot.tracking().maxCandidatesPerScan());
         assertEquals(TrackingMode.EVENT_DRIVEN, snapshot.tracking().mode());
+        assertTrue(snapshot.stackedCrops().enabled());
+        assertEquals(List.of("SUGAR_CANE", "CACTUS", "BAMBOO", "KELP"),
+                snapshot.stackedCrops().items());
+        assertEquals(32, snapshot.stackedCrops().maxSegmentsPerHarvest());
         assertTrue(snapshot.update().enabled());
         assertEquals(6, snapshot.update().checkIntervalHours());
         assertEquals(List.of("WHEAT", "CARROT", "POTATO", "PUMPKIN"), snapshot.config().getItems());
@@ -96,6 +100,10 @@ class ConfigurationMaintenanceTest {
                 defaultStatus: false
                 customPerm: " "
                 items: [WHEAT, AIR, MELON, WHEAT]
+                stacked-crops:
+                  enable: "yes"
+                  items: [BAMBOO, AIR, KELP_PLANT, BAMBOO]
+                  max-segments-per-harvest: 999
                 update-checker:
                   enable: "yes"
                   check-interval-hours: 0
@@ -130,6 +138,9 @@ class ConfigurationMaintenanceTest {
         assertFalse(repaired.getBoolean("checkAllDirections"));
         assertEquals("farmer.autoharvest", repaired.getString("customPerm"));
         assertEquals(List.of("WHEAT", "MELON_SLICE"), repaired.getStringList("items"));
+        assertTrue(repaired.getBoolean("stacked-crops.enable"));
+        assertEquals(List.of("BAMBOO", "KELP"), repaired.getStringList("stacked-crops.items"));
+        assertEquals(32, repaired.getInt("stacked-crops.max-segments-per-harvest"));
         assertFalse(repaired.getBoolean("optimize-module.enable"));
         assertEquals(2, repaired.getInt("optimize-module.queue.initial-delay-ticks"));
         assertEquals(1, repaired.getInt("optimize-module.queue.continuation-delay-ticks"));
@@ -148,7 +159,7 @@ class ConfigurationMaintenanceTest {
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(5, repaired.getInt("config-version"));
+        assertEquals(6, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 

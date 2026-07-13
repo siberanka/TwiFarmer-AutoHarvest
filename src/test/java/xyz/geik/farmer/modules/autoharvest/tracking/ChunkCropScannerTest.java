@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
 import java.util.Map;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -14,6 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
+import org.mockito.ArgumentCaptor;
 
 class ChunkCropScannerTest {
 
@@ -64,6 +68,38 @@ class ChunkCropScannerTest {
         assertTrue(result.containsCrop());
         assertEquals(1, result.candidates().size());
         assertEquals(11, result.candidates().getFirst().y());
+    }
+
+    @Test
+    void treatsKelpAndKelpPlantAsOneStackedCropColumn() {
+        ChunkSnapshot snapshot = mock(ChunkSnapshot.class);
+        when(snapshot.getBlockType(4, 10, 4)).thenReturn(Material.KELP_PLANT);
+        when(snapshot.getBlockType(4, 11, 4)).thenReturn(Material.KELP);
+
+        ChunkCropScanner.ScanResult result = ChunkCropScanner.scan(
+                snapshot, 0, 16,
+                Map.of(Material.KELP, XMaterial.KELP, Material.KELP_PLANT, XMaterial.KELP), 64);
+
+        assertTrue(result.containsCrop());
+        assertEquals(1, result.candidates().size());
+        assertEquals(11, result.candidates().getFirst().y());
+        assertEquals(XMaterial.KELP, result.candidates().getFirst().material());
+    }
+
+    @Test
+    void convertsNegativeWorldSectionsToSnapshotRelativeIndexes() {
+        ChunkSnapshot snapshot = mock(ChunkSnapshot.class);
+        when(snapshot.isSectionEmpty(anyInt())).thenReturn(true);
+
+        ChunkCropScanner.ScanResult result = ChunkCropScanner.scan(
+                snapshot, -64, 320, Map.of(Material.WHEAT, XMaterial.WHEAT), 64);
+
+        ArgumentCaptor<Integer> sections = ArgumentCaptor.forClass(Integer.class);
+        verify(snapshot, times(24)).isSectionEmpty(sections.capture());
+        List<Integer> indexes = sections.getAllValues();
+        assertEquals(0, result.checkedBlocks());
+        assertEquals(0, indexes.stream().mapToInt(Integer::intValue).min().orElseThrow());
+        assertEquals(23, indexes.stream().mapToInt(Integer::intValue).max().orElseThrow());
     }
 
     @Test

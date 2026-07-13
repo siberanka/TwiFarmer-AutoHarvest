@@ -46,6 +46,7 @@ public final class ConfigurationMaintenance {
     private static final String BACKPRESSURE = OPTIMIZE_MODULE + ".adaptive-backpressure";
     private static final String TELEMETRY = OPTIMIZE_MODULE + ".telemetry";
     private static final String UPDATE_CHECKER = "update-checker";
+    private static final String STACKED_CROPS = "stacked-crops";
 
     private ConfigurationMaintenance() {
     }
@@ -73,6 +74,7 @@ public final class ConfigurationMaintenance {
 
         return new ConfigSnapshot(
                 ConfigFile.from(loaded.configuration),
+                StackedCropSettings.from(loaded.configuration),
                 readOptimizationSettings(loaded.configuration),
                 readTrackingSettings(loaded.configuration),
                 readBackpressureSettings(loaded.configuration),
@@ -108,7 +110,7 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= repairInteger(configuration, defaults, "config-version", 5, 5);
+        changed |= repairInteger(configuration, defaults, "config-version", 6, 6);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -117,6 +119,11 @@ public final class ConfigurationMaintenance {
         changed |= repairBoolean(configuration, defaults, "defaultStatus");
         changed |= repairString(configuration, defaults, "customPerm", ConfigurationMaintenance::isValidPermission);
         changed |= repairCropList(configuration, defaults);
+        changed |= ensureSection(configuration, STACKED_CROPS);
+        changed |= repairBoolean(configuration, defaults, STACKED_CROPS + ".enable");
+        changed |= repairStackedCropList(configuration, defaults);
+        changed |= repairInteger(configuration, defaults,
+                STACKED_CROPS + ".max-segments-per-harvest", 1, 256);
         changed |= ensureSection(configuration, UPDATE_CHECKER);
         changed |= repairBoolean(configuration, defaults, UPDATE_CHECKER + ".enable");
         changed |= repairInteger(configuration, defaults, UPDATE_CHECKER + ".check-interval-hours", 1, 168);
@@ -288,6 +295,44 @@ public final class ConfigurationMaintenance {
             XMaterial.matchXMaterial(crop.trim())
                     .map(CropHarvesting::normalize)
                     .filter(CropHarvesting::isSupportedCrop)
+                    .map(Enum::name)
+                    .ifPresent(normalized::add);
+        }
+        return new ArrayList<>(normalized);
+    }
+
+    private static boolean repairStackedCropList(
+            YamlConfiguration configuration,
+            YamlConfiguration defaults
+    ) {
+        String path = STACKED_CROPS + ".items";
+        Object raw = configuration.get(path);
+        List<String> fallback = normalizeStackedCrops(defaults.getList(path));
+        if (!(raw instanceof List<?> rawItems)) {
+            configuration.set(path, fallback);
+            return true;
+        }
+
+        List<String> normalized = normalizeStackedCrops(rawItems);
+        if (normalized.isEmpty()) {
+            normalized = fallback;
+        }
+        if (!normalized.equals(rawItems)) {
+            configuration.set(path, normalized);
+            return true;
+        }
+        return false;
+    }
+
+    private static List<String> normalizeStackedCrops(List<?> rawItems) {
+        Set<String> normalized = new LinkedHashSet<>();
+        for (Object rawItem : rawItems) {
+            if (!(rawItem instanceof String crop) || crop.isBlank()) {
+                continue;
+            }
+            XMaterial.matchXMaterial(crop.trim())
+                    .map(CropHarvesting::normalize)
+                    .filter(CropHarvesting::isStackCrop)
                     .map(Enum::name)
                     .ifPresent(normalized::add);
         }
@@ -514,6 +559,7 @@ public final class ConfigurationMaintenance {
 
     public record ConfigSnapshot(
             @NotNull ConfigFile config,
+            @NotNull StackedCropSettings stackedCrops,
             @NotNull OptimizationSettings optimization,
             @NotNull TrackingSettings tracking,
             @NotNull BackpressureSettings backpressure,

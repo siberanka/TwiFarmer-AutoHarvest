@@ -40,6 +40,9 @@ public final class CropHarvesting {
             Map.entry(Material.MELON, XMaterial.MELON_SLICE),
             Map.entry(Material.PUMPKIN, XMaterial.PUMPKIN),
             Map.entry(Material.CACTUS, XMaterial.CACTUS),
+            Map.entry(Material.BAMBOO, XMaterial.BAMBOO),
+            Map.entry(Material.KELP, XMaterial.KELP),
+            Map.entry(Material.KELP_PLANT, XMaterial.KELP),
             Map.entry(Material.CHORUS_FLOWER, XMaterial.CHORUS_FLOWER),
             Map.entry(Material.CHORUS_PLANT, XMaterial.CHORUS_PLANT)
     );
@@ -55,6 +58,7 @@ public final class CropHarvesting {
             case "SWEET_BERRY_BUSH" -> XMaterial.SWEET_BERRIES;
             case "MELON" -> XMaterial.MELON_SLICE;
             case "COCOA" -> XMaterial.COCOA_BEANS;
+            case "KELP_PLANT" -> XMaterial.KELP;
             default -> material;
         };
     }
@@ -97,8 +101,8 @@ public final class CropHarvesting {
             return false;
         }
         return !isStackCrop(current)
-                || (block.getRelative(BlockFace.DOWN).getType() == block.getType()
-                && block.getRelative(BlockFace.UP).getType() != block.getType());
+                || (isSameCrop(block.getRelative(BlockFace.DOWN), current)
+                && !isSameCrop(block.getRelative(BlockFace.UP), current));
     }
 
     public static boolean isSnapshotHarvestable(
@@ -115,16 +119,16 @@ public final class CropHarvesting {
         }
         return !isStackCrop(material)
                 || (y > minimumY
-                && snapshot.getBlockType(x, y - 1, z) == snapshot.getBlockType(x, y, z)
+                && isSameCrop(snapshot, x, y - 1, z, material)
                 && (y + 1 >= maximumY
-                || snapshot.getBlockType(x, y + 1, z) != snapshot.getBlockType(x, y, z)));
+                || !isSameCrop(snapshot, x, y + 1, z, material)));
     }
 
     static @NotNull List<ItemStack> snapshotDrops(@NotNull Block block) {
         Collection<ItemStack> rawDrops = block.getDrops();
         List<ItemStack> drops = new ArrayList<>(rawDrops.size());
         for (ItemStack drop : rawDrops) {
-            if (drop != null && !drop.getType().isAir() && drop.getAmount() > 0) {
+            if (drop != null && !isAir(drop.getType()) && drop.getAmount() > 0) {
                 drops.add(drop.clone());
             }
         }
@@ -155,16 +159,85 @@ public final class CropHarvesting {
         return true;
     }
 
+    static boolean harvestStacked(@NotNull Block top, @NotNull XMaterial material, int maximumSegments) {
+        List<Block> segments = stackedSegments(top, material, maximumSegments);
+        if (segments.isEmpty()) {
+            return false;
+        }
+
+        List<StackedSegment> plan = new ArrayList<>(segments.size());
+        for (Block segment : segments) {
+            if (!isSameCrop(segment, material)) {
+                return false;
+            }
+            List<ItemStack> drops = snapshotDrops(segment);
+            if (drops.isEmpty()) {
+                ItemStack fallback = material.parseItem();
+                if (fallback != null && !isAir(fallback.getType())) {
+                    drops.add(fallback);
+                }
+            }
+            plan.add(new StackedSegment(segment, drops));
+        }
+
+        // Mutate and pay each segment exactly once. A later failure can leave
+        // unprocessed growth in place, but can never award its drops early.
+        for (StackedSegment segment : plan) {
+            if (!isSameCrop(segment.block(), material)) {
+                return false;
+            }
+            segment.block().setType(Material.AIR, false);
+            if (!isAir(segment.block().getType())) {
+                return false;
+            }
+            for (ItemStack drop : segment.drops()) {
+                segment.block().getWorld().dropItemNaturally(segment.block().getLocation(), drop);
+            }
+        }
+        restoreStackBase(segments.getLast().getRelative(BlockFace.DOWN), material);
+        return true;
+    }
+
+    static @NotNull List<Block> stackedSegments(
+            @NotNull Block top,
+            @NotNull XMaterial material,
+            int maximumSegments
+    ) {
+        if (!isStackCrop(material) || maximumSegments <= 0
+                || !isSameCrop(top, material)
+                || isSameCrop(top.getRelative(BlockFace.UP), material)) {
+            return List.of();
+        }
+
+        List<Block> harvestable = new ArrayList<>(Math.min(maximumSegments, 16));
+        Block cursor = top;
+        while (isSameCrop(cursor, material)) {
+            Block below = cursor.getRelative(BlockFace.DOWN);
+            if (!isSameCrop(below, material)) {
+                return List.copyOf(harvestable);
+            }
+            if (harvestable.size() >= maximumSegments) {
+                return List.of();
+            }
+            harvestable.add(cursor);
+            cursor = below;
+        }
+        return List.of();
+    }
+
     static boolean isBlockCrop(@NotNull XMaterial material) {
         return switch (material.name()) {
-            case "SUGAR_CANE", "MELON_SLICE", "PUMPKIN", "CACTUS",
+            case "SUGAR_CANE", "MELON_SLICE", "PUMPKIN", "CACTUS", "BAMBOO", "KELP",
                     "CHORUS_FLOWER", "CHORUS_PLANT" -> true;
             default -> false;
         };
     }
 
-    private static boolean isStackCrop(@NotNull XMaterial material) {
-        return material == XMaterial.SUGAR_CANE || material == XMaterial.CACTUS;
+    public static boolean isStackCrop(@NotNull XMaterial material) {
+        return switch (material.name()) {
+            case "SUGAR_CANE", "CACTUS", "BAMBOO", "KELP" -> true;
+            default -> false;
+        };
     }
 
     static boolean isAgeableCrop(@NotNull XMaterial material) {
@@ -173,5 +246,33 @@ public final class CropHarvesting {
                     "NETHER_WART", "COCOA_BEANS" -> true;
             default -> false;
         };
+    }
+
+    private static boolean isSameCrop(@NotNull Block block, @NotNull XMaterial expected) {
+        return resolveBlockMaterial(block.getType()) == expected;
+    }
+
+    private static boolean isAir(@Nullable Material material) {
+        return material == Material.AIR || material == Material.CAVE_AIR || material == Material.VOID_AIR;
+    }
+
+    private static void restoreStackBase(@NotNull Block base, @NotNull XMaterial material) {
+        if (material == XMaterial.KELP && base.getType() == Material.KELP_PLANT) {
+            base.setType(Material.KELP, false);
+        }
+    }
+
+    private static boolean isSameCrop(
+            @NotNull ChunkSnapshot snapshot,
+            int x,
+            int y,
+            int z,
+            @NotNull XMaterial expected
+    ) {
+        Material material = snapshot.getBlockType(x, y, z);
+        return material != null && resolveBlockMaterial(material) == expected;
+    }
+
+    private record StackedSegment(@NotNull Block block, @NotNull List<ItemStack> drops) {
     }
 }
