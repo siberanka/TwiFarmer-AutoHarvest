@@ -72,6 +72,19 @@ class ConfigurationMaintenanceTest {
     }
 
     @Test
+    void preservesEnabledStatusWhileAddingMissingEntries() throws Exception {
+        File target = temporaryDirectory.resolve("config.yml").toFile();
+        Files.writeString(target.toPath(), "status: true\n", StandardCharsets.UTF_8);
+
+        ConfigurationMaintenance.ConfigSnapshot snapshot = reconcileConfig(target);
+
+        assertTrue(snapshot.repaired());
+        assertTrue(snapshot.config().isStatus());
+        assertTrue(YamlConfiguration.loadConfiguration(target).getBoolean("status"));
+        assertEquals(1, backupCount());
+    }
+
+    @Test
     void backsUpAndRepairsInvalidKnownConfigEntries() throws Exception {
         File target = temporaryDirectory.resolve("config.yml").toFile();
         Files.writeString(target.toPath(), """

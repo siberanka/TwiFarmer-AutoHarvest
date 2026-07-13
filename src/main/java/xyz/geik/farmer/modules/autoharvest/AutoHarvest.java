@@ -97,10 +97,12 @@ public class AutoHarvest extends FarmerModule {
             setEnabled(false);
             return;
         }
-        startUpdateChecker();
 
         if (configFile.isStatus()) {
-            activateRuntime();
+            if (!activateRuntime()) {
+                setEnabled(false);
+                return;
+            }
             ChatUtils.sendMessage(Bukkit.getConsoleSender(),
                     "&3[" + GLib.getInstance().getName() + "] &a" + getName() + " enabled.");
             ChatUtils.sendMessage(Bukkit.getConsoleSender(), "&3[" + GLib.getInstance().getName()
@@ -111,6 +113,7 @@ public class AutoHarvest extends FarmerModule {
             ChatUtils.sendMessage(Bukkit.getConsoleSender(),
                     "&3[" + GLib.getInstance().getName() + "] &c" + getName() + " is not loaded.");
         }
+        startUpdateChecker();
     }
 
     @Override
@@ -128,14 +131,17 @@ public class AutoHarvest extends FarmerModule {
         if (!loadConfigurationFiles()) {
             return;
         }
-        startUpdateChecker();
 
         if (configFile.isStatus()) {
-            activateRuntime();
+            if (!activateRuntime()) {
+                setEnabled(false);
+                return;
+            }
         }
         else {
             unregisterListeners();
         }
+        startUpdateChecker();
     }
 
     @Override
@@ -161,12 +167,29 @@ public class AutoHarvest extends FarmerModule {
         }
     }
 
-    private void activateRuntime() {
-        applyConfiguration();
-        setHasGui(true);
-        active = true;
-        registerListeners();
-        cropTrackingService.start(activeTrackingSettings, activeBackpressure, activeTelemetry);
+    private boolean activateRuntime() {
+        try {
+            applyConfiguration();
+            setHasGui(true);
+            active = true;
+            registerListeners();
+            cropTrackingService.start(activeTrackingSettings, activeBackpressure, activeTelemetry);
+            return true;
+        }
+        catch (RuntimeException | LinkageError exception) {
+            active = false;
+            optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
+                    BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
+            try {
+                unregisterListeners();
+            }
+            catch (RuntimeException | LinkageError cleanupFailure) {
+                exception.addSuppressed(cleanupFailure);
+            }
+            Main.getInstance().getLogger().log(Level.SEVERE,
+                    "AutoHarvest could not activate its runtime; the module was disabled.", exception);
+            return false;
+        }
     }
 
     private void registerListeners() {
@@ -268,14 +291,37 @@ public class AutoHarvest extends FarmerModule {
 
     private void startUpdateChecker() {
         stopUpdateChecker();
-        updateChecker = new UpdateChecker(this, updateSettings);
-        updateChecker.start();
+        UpdateChecker checker = null;
+        try {
+            checker = new UpdateChecker(this, updateSettings);
+            checker.start();
+            updateChecker = checker;
+        }
+        catch (RuntimeException | LinkageError exception) {
+            if (checker != null) {
+                try {
+                    checker.stop();
+                }
+                catch (RuntimeException | LinkageError cleanupFailure) {
+                    exception.addSuppressed(cleanupFailure);
+                }
+            }
+            Main.getInstance().getLogger().log(Level.WARNING,
+                    "AutoHarvest update checks could not start; harvesting remains enabled.", exception);
+        }
     }
 
     private void stopUpdateChecker() {
-        if (updateChecker != null) {
-            updateChecker.stop();
-            updateChecker = null;
+        UpdateChecker checker = updateChecker;
+        updateChecker = null;
+        if (checker != null) {
+            try {
+                checker.stop();
+            }
+            catch (RuntimeException | LinkageError exception) {
+                Main.getInstance().getLogger().log(Level.WARNING,
+                        "AutoHarvest update checks could not stop cleanly.", exception);
+            }
         }
     }
 
