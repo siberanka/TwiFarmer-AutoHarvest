@@ -12,12 +12,12 @@ import org.bukkit.event.block.BlockGrowEvent;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.Main;
-import xyz.geik.farmer.api.managers.FarmerManager;
 import xyz.geik.farmer.helpers.WorldHelper;
 import xyz.geik.farmer.model.Farmer;
 import xyz.geik.farmer.model.inventory.FarmerInv;
 import xyz.geik.farmer.model.inventory.FarmerItem;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
+import xyz.geik.farmer.modules.autoharvest.compat.FarmerAccess;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
 import java.util.List;
@@ -152,7 +152,7 @@ public class AutoHarvestEvent implements Listener {
     private Farmer findFarmer(@NotNull Location location) {
         try {
             String regionId = Main.getIntegration().getRegionID(location);
-            return regionId == null ? null : FarmerManager.getFarmers().get(regionId);
+            return FarmerAccess.findByRegionId(regionId);
         }
         catch (RuntimeException exception) {
             if (lookupFailureLogged.compareAndSet(false, true)) {

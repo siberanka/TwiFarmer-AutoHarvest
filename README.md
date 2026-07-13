@@ -14,13 +14,15 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.2.5.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.2.6.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
 The module refuses to enable when Paper's region scheduler API is unavailable.
 
 Crop block discovery uses an explicit modern-material table. Legacy Bukkit constants are never passed to XMaterial during startup, allowing the module and its management-panel icon to load reliably on current Paper, Folia, and Leaf builds.
+
+Farmer cache access is linked through a one-time MethodHandle adapter. This preserves compatibility with both the `HashMap` return descriptor used by Farmer v6-b113 and the `Map` descriptor used by v6-b117 and newer without reflection in the per-block lookup path.
 
 ## Automatic File Maintenance
 

@@ -21,10 +21,10 @@ import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.Main;
 import xyz.geik.farmer.api.handlers.FarmerBoughtEvent;
-import xyz.geik.farmer.api.managers.FarmerManager;
 import xyz.geik.farmer.helpers.WorldHelper;
 import xyz.geik.farmer.model.Farmer;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
+import xyz.geik.farmer.modules.autoharvest.compat.FarmerAccess;
 import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TrackingSettings;
@@ -523,7 +523,7 @@ public final class CropTrackingService implements Listener {
     private boolean hasEnabledFarmer(Location location) {
         try {
             String regionId = Main.getIntegration().getRegionID(location);
-            Farmer farmer = regionId == null ? null : FarmerManager.getFarmers().get(regionId);
+            Farmer farmer = FarmerAccess.findByRegionId(regionId);
             return farmer != null && farmer.getAttributeStatus("autoharvest");
         }
         catch (RuntimeException exception) {

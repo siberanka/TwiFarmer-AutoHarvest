@@ -6,7 +6,7 @@
 
     <groupId>xyz.geik.farmer</groupId>
     <artifactId>Farmer-AutoHarvest</artifactId>
-    <version>1.2.5</version>
+    <version>1.2.6</version>
     <name>Farmer AutoHarvest</name>
     <description>Paper, Folia and Leaf compatible automatic harvesting module for Farmer.</description>
     <url>https://github.com/siberanka/TwiFarmer-AutoHarvest</url>
