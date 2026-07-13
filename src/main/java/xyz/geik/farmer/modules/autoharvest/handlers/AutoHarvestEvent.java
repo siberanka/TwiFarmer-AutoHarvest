@@ -68,8 +68,8 @@ public class AutoHarvestEvent implements Listener {
         if (module == null) {
             return;
         }
-        XMaterial material = CropHarvesting.normalize(XMaterial.matchXMaterial(newState.getType()));
-        if (!AutoHarvest.checkCrop(material)
+        XMaterial material = module.resolveCrop(newState.getType());
+        if (material == null
                 || !CropHarvesting.isHarvestableGrowth(newState.getBlockData(), material)
                 || !WorldHelper.isFarmerAllowed(newState.getWorld().getName())) {
             return;

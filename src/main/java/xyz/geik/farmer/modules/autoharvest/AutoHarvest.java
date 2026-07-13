@@ -30,7 +30,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
@@ -327,7 +326,7 @@ public class AutoHarvest extends FarmerModule {
 
     private void applyConfiguration() {
         crops = parseCrops(configFile.getItems());
-        cropMaterials = mapCropMaterials(crops);
+        cropMaterials = CropHarvesting.configuredBlockMaterials(crops);
         requirePiston = configFile.isRequirePiston();
         checkAllDirections = configFile.isCheckAllDirections();
         withoutFarmer = configFile.isWithoutFarmer();
@@ -352,17 +351,6 @@ public class AutoHarvest extends FarmerModule {
                     .ifPresent(parsed::add);
         }
         return parsed.isEmpty() ? Collections.emptySet() : Collections.unmodifiableSet(parsed);
-    }
-
-    private Map<Material, XMaterial> mapCropMaterials(Set<XMaterial> configuredCrops) {
-        EnumMap<Material, XMaterial> mapped = new EnumMap<>(Material.class);
-        for (Material material : Material.values()) {
-            XMaterial normalized = CropHarvesting.normalize(XMaterial.matchXMaterial(material));
-            if (configuredCrops.contains(normalized)) {
-                mapped.put(material, normalized);
-            }
-        }
-        return mapped.isEmpty() ? Collections.emptyMap() : Collections.unmodifiableMap(mapped);
     }
 
     /**

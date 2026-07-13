@@ -8,11 +8,16 @@ import org.bukkit.block.data.Ageable;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Region-local crop classification and mutation helpers.
@@ -22,6 +27,22 @@ import java.util.List;
  * @since 1.1.0
  */
 public final class CropHarvesting {
+
+    private static final Map<Material, XMaterial> BLOCK_MATERIALS = Map.ofEntries(
+            Map.entry(Material.WHEAT, XMaterial.WHEAT),
+            Map.entry(Material.CARROTS, XMaterial.CARROT),
+            Map.entry(Material.POTATOES, XMaterial.POTATO),
+            Map.entry(Material.BEETROOTS, XMaterial.BEETROOT),
+            Map.entry(Material.SWEET_BERRY_BUSH, XMaterial.SWEET_BERRIES),
+            Map.entry(Material.NETHER_WART, XMaterial.NETHER_WART),
+            Map.entry(Material.COCOA, XMaterial.COCOA_BEANS),
+            Map.entry(Material.SUGAR_CANE, XMaterial.SUGAR_CANE),
+            Map.entry(Material.MELON, XMaterial.MELON_SLICE),
+            Map.entry(Material.PUMPKIN, XMaterial.PUMPKIN),
+            Map.entry(Material.CACTUS, XMaterial.CACTUS),
+            Map.entry(Material.CHORUS_FLOWER, XMaterial.CHORUS_FLOWER),
+            Map.entry(Material.CHORUS_PLANT, XMaterial.CHORUS_PLANT)
+    );
 
     private CropHarvesting() {
     }
@@ -42,6 +63,25 @@ public final class CropHarvesting {
         return isAgeableCrop(material) || isBlockCrop(material);
     }
 
+    public static @Nullable XMaterial resolveBlockMaterial(@NotNull Material material) {
+        return BLOCK_MATERIALS.get(material);
+    }
+
+    public static @NotNull Map<Material, XMaterial> configuredBlockMaterials(
+            @NotNull Set<XMaterial> configuredCrops
+    ) {
+        if (configuredCrops.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        EnumMap<Material, XMaterial> mapped = new EnumMap<>(Material.class);
+        BLOCK_MATERIALS.forEach((material, crop) -> {
+            if (configuredCrops.contains(crop)) {
+                mapped.put(material, crop);
+            }
+        });
+        return mapped.isEmpty() ? Collections.emptyMap() : Collections.unmodifiableMap(mapped);
+    }
+
     public static boolean isHarvestableGrowth(@NotNull BlockData data, @NotNull XMaterial material) {
         if (isBlockCrop(material)) {
             return true;
@@ -52,7 +92,7 @@ public final class CropHarvesting {
     }
 
     static boolean isStillHarvestable(@NotNull Block block, @NotNull XMaterial expectedMaterial) {
-        XMaterial current = normalize(XMaterial.matchXMaterial(block.getType()));
+        XMaterial current = resolveBlockMaterial(block.getType());
         if (current != expectedMaterial || !isHarvestableGrowth(block.getBlockData(), current)) {
             return false;
         }

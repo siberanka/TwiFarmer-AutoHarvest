@@ -12,8 +12,14 @@ import org.junit.jupiter.api.Test;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -29,6 +35,19 @@ class CropHarvestingTest {
         assertTrue(CropHarvesting.normalize(XMaterial.BEETROOTS) == XMaterial.BEETROOT);
         assertTrue(CropHarvesting.normalize(XMaterial.MELON) == XMaterial.MELON_SLICE);
         assertTrue(CropHarvesting.normalize(XMaterial.COCOA) == XMaterial.COCOA_BEANS);
+    }
+
+    @Test
+    void buildsConfiguredCropMapWithoutParsingLegacyMaterials() {
+        Map<Material, XMaterial> materials = assertDoesNotThrow(() ->
+                CropHarvesting.configuredBlockMaterials(Set.of(XMaterial.WHEAT, XMaterial.CARROT)));
+
+        assertEquals(XMaterial.WHEAT, materials.get(Material.WHEAT));
+        assertEquals(XMaterial.CARROT, materials.get(Material.CARROTS));
+        assertFalse(materials.containsKey(Material.POTATOES));
+        Material legacyAir = Material.getMaterial("LEGACY_AIR");
+        assertNotNull(legacyAir);
+        assertNull(CropHarvesting.resolveBlockMaterial(legacyAir));
     }
 
     @Test
