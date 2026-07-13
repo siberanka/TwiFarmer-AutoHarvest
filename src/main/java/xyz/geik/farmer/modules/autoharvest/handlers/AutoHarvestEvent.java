@@ -1,6 +1,7 @@
 package xyz.geik.farmer.modules.autoharvest.handlers;
 
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
@@ -18,6 +19,8 @@ import xyz.geik.farmer.model.inventory.FarmerInv;
 import xyz.geik.farmer.model.inventory.FarmerItem;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
 import xyz.geik.farmer.modules.autoharvest.compat.FarmerAccess;
+import xyz.geik.farmer.modules.autoharvest.configuration.HarvestPacingScope;
+import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
 import java.util.List;
@@ -83,8 +86,57 @@ public class AutoHarvestEvent implements Listener {
         if (module == null || !AutoHarvest.checkCrop(material)) {
             return;
         }
+        String scopeKey = resolveScopeKey(module, location);
+        if (scopeKey == null) {
+            return;
+        }
         long generation = module.getLifecycleGeneration();
-        module.scheduleHarvest(location, () -> harvestIfEligible(location, material, generation));
+        module.scheduleHarvest(scopeKey, location, () -> harvestIfEligible(location, material, generation));
+    }
+
+    private String resolveScopeKey(AutoHarvest module, Location location) {
+        World world = location.getWorld();
+        if (world == null) {
+            return null;
+        }
+        String chunkScope = chunkScope(world, location);
+        OptimizationSettings settings = module.getActiveOptimizationSettings();
+        if (!settings.perScopePacingEnabled() || module.isWithoutFarmer()
+                || settings.pacingScope() == HarvestPacingScope.CHUNK) {
+            return chunkScope;
+        }
+        try {
+            String regionId = Main.getIntegration().getRegionID(location);
+            Farmer farmer = FarmerAccess.findByRegionId(regionId);
+            if (farmer == null) {
+                return null;
+            }
+            synchronized (farmer) {
+                if (!farmer.getAttributeStatus("autoharvest")) {
+                    return null;
+                }
+                String owner = farmer.getOwnerUUID() == null
+                        ? "unknown" : farmer.getOwnerUUID().toString();
+                return switch (settings.pacingScope()) {
+                    case OWNER -> "owner:" + owner;
+                    case FARMER -> "farmer:" + owner + ':' + farmer.getId();
+                    case REGION -> "region:" + regionId;
+                    case CHUNK -> chunkScope;
+                };
+            }
+        }
+        catch (RuntimeException exception) {
+            if (lookupFailureLogged.compareAndSet(false, true)) {
+                Main.getInstance().getLogger().log(Level.WARNING,
+                        "AutoHarvest could not resolve a Farmer pacing scope; harvesting was denied.", exception);
+            }
+            return null;
+        }
+    }
+
+    private String chunkScope(World world, Location location) {
+        return "chunk:" + world.getUID() + ':'
+                + (location.getBlockX() >> 4) + ':' + (location.getBlockZ() >> 4);
     }
 
     private void harvestIfEligible(@NotNull Location location, @NotNull XMaterial material, long generation) {

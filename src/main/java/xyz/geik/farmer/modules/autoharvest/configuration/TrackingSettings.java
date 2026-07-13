@@ -28,6 +28,7 @@ public record TrackingSettings(
         int maxBlockChecksPerSlice,
         int maxPendingScans,
         int maxCandidatesPerScan,
+        int maxCandidateAdmissionsPerTick,
         int purchaseRadiusChunks,
         int bootstrapRadiusChunks
 ) {
@@ -36,7 +37,7 @@ public record TrackingSettings(
             TrackingMode.EVENT_DRIVEN,
             true, true, true, false, true, true, true, true,
             200, 1, 2_048, 1, 1, 2, 16, 4_096,
-            512, 128, 8, 2
+            512, 512, 16, 8, 2
     );
 
     public static TrackingSettings baseline() {

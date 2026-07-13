@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 
@@ -72,6 +73,7 @@ public class AutoHarvest extends FarmerModule {
     private volatile int maxStackedSegmentsPerHarvest = 32;
     private volatile StackedCropSettings stackedCropSettings = StackedCropSettings.disabled();
     private volatile OptimizationSettings optimizationSettings = OptimizationSettings.DEFAULT;
+    private volatile OptimizationSettings activeOptimizationSettings = OptimizationSettings.baseline();
     private volatile TrackingSettings configuredTrackingSettings = TrackingSettings.baseline();
     private volatile TrackingSettings activeTrackingSettings = TrackingSettings.baseline();
     private volatile BackpressureSettings configuredBackpressure = BackpressureSettings.DEFAULT;
@@ -161,6 +163,7 @@ public class AutoHarvest extends FarmerModule {
         maxStackedSegmentsPerHarvest = 32;
         stackedCropSettings = StackedCropSettings.disabled();
         optimizationSettings = OptimizationSettings.DEFAULT;
+        activeOptimizationSettings = OptimizationSettings.baseline();
         configuredTrackingSettings = TrackingSettings.baseline();
         activeTrackingSettings = TrackingSettings.baseline();
         configuredBackpressure = BackpressureSettings.DEFAULT;
@@ -180,6 +183,7 @@ public class AutoHarvest extends FarmerModule {
             active = true;
             registerListeners();
             cropTrackingService.start(activeTrackingSettings, activeBackpressure, activeTelemetry);
+            optimizedHarvestQueue.setChunkDrainListener(cropTrackingService::onHarvestQueueDrained);
             return true;
         }
         catch (RuntimeException | LinkageError exception) {
@@ -217,6 +221,7 @@ public class AutoHarvest extends FarmerModule {
         active = false;
         setHasGui(false);
         if (cropTrackingService != null) {
+            optimizedHarvestQueue.setChunkDrainListener(null);
             cropTrackingService.stop();
             HandlerList.unregisterAll(cropTrackingService);
             cropTrackingService = null;
@@ -349,12 +354,12 @@ public class AutoHarvest extends FarmerModule {
         customPerm = configFile.getCustomPerm();
         setDefaultState(configFile.isDefaultStatus());
         boolean configuredOptimization = optimizationSettings.enabled();
-        OptimizationSettings activeQueueSettings = configuredOptimization
+        activeOptimizationSettings = configuredOptimization
                 ? optimizationSettings : OptimizationSettings.baseline();
         activeTrackingSettings = configuredOptimization ? configuredTrackingSettings : TrackingSettings.baseline();
         activeBackpressure = configuredOptimization ? configuredBackpressure : BackpressureSettings.BASELINE;
         activeTelemetry = configuredOptimization ? configuredTelemetry : TelemetrySettings.DISABLED;
-        optimizedHarvestQueue.configure(activeQueueSettings, activeBackpressure, activeTelemetry);
+        optimizedHarvestQueue.configure(activeOptimizationSettings, activeBackpressure, activeTelemetry);
     }
 
     private Set<XMaterial> parseCrops(List<String> configuredCrops) {
@@ -380,12 +385,17 @@ public class AutoHarvest extends FarmerModule {
     }
 
     /**
-     * Schedules one validated crop action through the globally bounded queue.
-     * Overflow is reconciled later and never becomes a direct scheduler flood.
+     * Schedules one validated crop action through the globally and per-scope
+     * bounded queue. Overflow is reconciled later and never becomes a direct
+     * scheduler flood.
      */
-    public void scheduleHarvest(@NotNull Location location, @NotNull Runnable action) {
+    public void scheduleHarvest(
+            @NotNull String scopeKey,
+            @NotNull Location location,
+            @NotNull Runnable action
+    ) {
         OptimizedHarvestQueue.SubmitResult result = optimizedHarvestQueue.submit(
-                Main.getInstance(), location, action, Main.getInstance().getLogger());
+                Main.getInstance(), location, scopeKey, action, Main.getInstance().getLogger());
         if (result == OptimizedHarvestQueue.SubmitResult.ENQUEUED
                 || result == OptimizedHarvestQueue.SubmitResult.COALESCED) {
             return;
@@ -394,6 +404,10 @@ public class AutoHarvest extends FarmerModule {
         if (result == OptimizedHarvestQueue.SubmitResult.DEFERRED && tracker != null && active) {
             tracker.requestReconciliation(location);
         }
+    }
+
+    public boolean hasPendingHarvests(@NotNull UUID worldId, int chunkX, int chunkZ) {
+        return optimizedHarvestQueue.hasPendingJobs(worldId, chunkX, chunkZ);
     }
 
     public static boolean checkCrop(XMaterial material) {
@@ -458,6 +472,10 @@ public class AutoHarvest extends FarmerModule {
 
     public OptimizationSettings getOptimizationSettings() {
         return optimizationSettings;
+    }
+
+    public OptimizationSettings getActiveOptimizationSettings() {
+        return activeOptimizationSettings;
     }
 
     public TrackingSettings getActiveTrackingSettings() {

@@ -14,15 +14,18 @@ public record OptimizationSettings(
         int globalMaxJobsPerTick,
         int maxSchedulerSubmissionsPerTick,
         int maxPendingJobs,
-        boolean coalesceDuplicates
+        boolean coalesceDuplicates,
+        boolean perScopePacingEnabled,
+        HarvestPacingScope pacingScope,
+        int perScopeDelayTicks
 ) {
 
     public static final OptimizationSettings DEFAULT = new OptimizationSettings(
-            false, 2, 1, 8, 32, 8, 4096, true
+            false, 2, 1, 8, 32, 8, 8192, true, true, HarvestPacingScope.FARMER, 2
     );
 
     private static final OptimizationSettings BASELINE = new OptimizationSettings(
-            true, 2, 1, 4, 16, 4, 1024, true
+            true, 2, 1, 4, 16, 4, 2048, true, true, HarvestPacingScope.FARMER, 3
     );
 
     public static OptimizationSettings baseline() {
@@ -38,7 +41,10 @@ public record OptimizationSettings(
                 DEFAULT.globalMaxJobsPerTick,
                 DEFAULT.maxSchedulerSubmissionsPerTick,
                 DEFAULT.maxPendingJobs,
-                DEFAULT.coalesceDuplicates
+                DEFAULT.coalesceDuplicates,
+                DEFAULT.perScopePacingEnabled,
+                DEFAULT.pacingScope,
+                DEFAULT.perScopeDelayTicks
         );
     }
 }

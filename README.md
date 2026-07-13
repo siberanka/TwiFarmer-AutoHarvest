@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.4.0.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.5.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -58,8 +58,12 @@ optimize-module:
     max-jobs-per-run: 8
     global-max-jobs-per-tick: 32
     max-scheduler-submissions-per-tick: 8
-    max-pending-jobs: 4096
+    max-pending-jobs: 8192
     coalesce-duplicates: true
+    per-scope-pacing:
+      enable: true
+      scope: "FARMER"
+      delay-ticks: 2
   tracking:
     mode: "EVENT_DRIVEN"
     conditions:
@@ -80,7 +84,8 @@ optimize-module:
     max-sections-per-second: 32
     max-block-checks-per-slice: 8192
     max-pending-scans: 4096
-    max-candidates-per-scan: 128
+    max-candidates-per-scan: 512
+    max-candidate-admissions-per-tick: 32
     purchase-radius-chunks: 8
     bootstrap-radius-chunks: 3
   adaptive-backpressure:
@@ -99,11 +104,15 @@ optimize-module:
 
 The most important hard limits are global, not per chunk: `global-max-jobs-per-tick` caps harvest actions across every world and Folia region, `max-scheduler-submissions-per-tick` caps region task fan-out, and `max-sections-per-second` caps primary snapshot block reads in 4096-block units. `max-block-checks-per-slice` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests bounded reconciliation; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
 
+`per-scope-pacing` drains large batches steadily instead of producing a short burst followed by a long reconciliation gap. `FARMER` gives every Farmer/island an independent pace and is the recommended default. `OWNER` shares one pace across every Farmer owned by a player, `REGION` isolates integration region IDs, and `CHUNK` isolates individual chunks. `delay-ticks: 2` permits one harvest attempt per scope every two ticks while unrelated scopes continue independently. The fixed baseline used while `optimize-module.enable: false` remains more conservative at one attempt per Farmer every three ticks.
+
 Adaptive backpressure uses Paper's rolling MSPT with hysteresis. Above `slowdown-above-mspt`, it gradually scales harvest jobs, region scheduler submissions, reconciliation chunks, snapshot captures, scan starts, section reads, and async slice sizes down toward `minimum-work-percent`. At `pause-above-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Telemetry logs cumulative queue/scan counters only at the configured low frequency and only when useful work, deferral, or failure exists.
 
-The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or reconciliation is due.
+The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, Farmer scope admission, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Candidate admission is sliced by `max-candidate-admissions-per-tick`, empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or reconciliation is due.
 
 Snapshot section indexes are translated relative to the world's minimum build height. Worlds using negative Y values, including the standard `-64..320` range on Leaf, therefore scan every section without accessing a negative snapshot index. A failed initial discovery is retained in the bounded reconciliation registry so a transient capture or async scan failure cannot permanently hide an already mature crop chunk.
+
+Dense chunks discover up to `max-candidates-per-scan` crops as one bounded batch. Reconciliation skips a chunk while its harvest queue is still draining. When a candidate-limited chunk queue becomes empty, a single drain callback immediately requests the next bounded scan, producing a slow continuous stream without polling every loaded chunk or repeatedly scanning the same still-pending crops.
 
 ## Crop Tracking
 

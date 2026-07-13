@@ -110,7 +110,7 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= repairInteger(configuration, defaults, "config-version", 7, 7);
+        changed |= repairInteger(configuration, defaults, "config-version", 8, 8);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -144,6 +144,12 @@ public final class ConfigurationMaintenance {
         changed |= repairInteger(configuration, defaults, QUEUE + ".max-scheduler-submissions-per-tick", 1, 64);
         changed |= repairInteger(configuration, defaults, QUEUE + ".max-pending-jobs", 64, 16_384);
         changed |= repairBoolean(configuration, defaults, QUEUE + ".coalesce-duplicates");
+        changed |= ensureSection(configuration, QUEUE + ".per-scope-pacing");
+        changed |= repairBoolean(configuration, defaults, QUEUE + ".per-scope-pacing.enable");
+        changed |= repairString(configuration, defaults, QUEUE + ".per-scope-pacing.scope",
+                ConfigurationMaintenance::isHarvestPacingScope);
+        changed |= repairInteger(configuration, defaults,
+                QUEUE + ".per-scope-pacing.delay-ticks", 1, 200);
         changed |= repairString(configuration, defaults, TRACKING + ".mode",
                 value -> isTrackingMode(value));
         changed |= repairBoolean(configuration, defaults, CONDITIONS + ".growth-events");
@@ -164,6 +170,8 @@ public final class ConfigurationMaintenance {
         changed |= repairInteger(configuration, defaults, TRACKING + ".max-block-checks-per-slice", 256, 16_384);
         changed |= repairInteger(configuration, defaults, TRACKING + ".max-pending-scans", 64, 16_384);
         changed |= repairInteger(configuration, defaults, TRACKING + ".max-candidates-per-scan", 16, 1_024);
+        changed |= repairInteger(configuration, defaults,
+                TRACKING + ".max-candidate-admissions-per-tick", 1, 128);
         changed |= repairInteger(configuration, defaults, TRACKING + ".purchase-radius-chunks", 1, 32);
         changed |= repairInteger(configuration, defaults, TRACKING + ".bootstrap-radius-chunks", 1, 16);
         changed |= repairBoolean(configuration, defaults, BACKPRESSURE + ".enable");
@@ -373,7 +381,10 @@ public final class ConfigurationMaintenance {
                 configuration.getInt(QUEUE + ".global-max-jobs-per-tick"),
                 configuration.getInt(QUEUE + ".max-scheduler-submissions-per-tick"),
                 configuration.getInt(QUEUE + ".max-pending-jobs"),
-                configuration.getBoolean(QUEUE + ".coalesce-duplicates")
+                configuration.getBoolean(QUEUE + ".coalesce-duplicates"),
+                configuration.getBoolean(QUEUE + ".per-scope-pacing.enable"),
+                HarvestPacingScope.parse(configuration.getString(QUEUE + ".per-scope-pacing.scope")),
+                configuration.getInt(QUEUE + ".per-scope-pacing.delay-ticks")
         );
     }
 
@@ -398,6 +409,7 @@ public final class ConfigurationMaintenance {
                 configuration.getInt(TRACKING + ".max-block-checks-per-slice"),
                 configuration.getInt(TRACKING + ".max-pending-scans"),
                 configuration.getInt(TRACKING + ".max-candidates-per-scan"),
+                configuration.getInt(TRACKING + ".max-candidate-admissions-per-tick"),
                 configuration.getInt(TRACKING + ".purchase-radius-chunks"),
                 configuration.getInt(TRACKING + ".bootstrap-radius-chunks")
         );
@@ -450,6 +462,18 @@ public final class ConfigurationMaintenance {
         }
         for (TrackingMode mode : TrackingMode.values()) {
             if (mode.name().equalsIgnoreCase(value.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isHarvestPacingScope(String value) {
+        if (value == null) {
+            return false;
+        }
+        for (HarvestPacingScope scope : HarvestPacingScope.values()) {
+            if (scope.name().equalsIgnoreCase(value.trim())) {
                 return true;
             }
         }

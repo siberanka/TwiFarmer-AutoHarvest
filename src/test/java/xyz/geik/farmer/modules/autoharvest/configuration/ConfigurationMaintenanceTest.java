@@ -63,8 +63,12 @@ class ConfigurationMaintenanceTest {
         assertFalse(snapshot.optimization().enabled());
         assertEquals(8, snapshot.optimization().maxJobsPerRun());
         assertEquals(32, snapshot.optimization().globalMaxJobsPerTick());
+        assertTrue(snapshot.optimization().perScopePacingEnabled());
+        assertEquals(HarvestPacingScope.FARMER, snapshot.optimization().pacingScope());
+        assertEquals(2, snapshot.optimization().perScopeDelayTicks());
         assertEquals(1, snapshot.tracking().maxConcurrentScans());
-        assertEquals(128, snapshot.tracking().maxCandidatesPerScan());
+        assertEquals(512, snapshot.tracking().maxCandidatesPerScan());
+        assertEquals(32, snapshot.tracking().maxCandidateAdmissionsPerTick());
         assertEquals(TrackingMode.EVENT_DRIVEN, snapshot.tracking().mode());
         assertTrue(snapshot.tracking().scanOnPlayerChunkLoad());
         assertEquals(35.0, snapshot.backpressure().slowdownAboveMspt());
@@ -122,9 +126,14 @@ class ConfigurationMaintenanceTest {
                     max-scheduler-submissions-per-tick: 900
                     max-pending-jobs: 3
                     coalesce-duplicates: "true"
+                    per-scope-pacing:
+                      enable: "yes"
+                      scope: "SERVER"
+                      delay-ticks: 0
                   tracking:
                     mode: "BROKEN"
                     max-sections-per-second: 9999
+                    max-candidate-admissions-per-tick: 9999
                     conditions:
                       scan-on-player-chunk-load: "yes"
                   adaptive-backpressure:
@@ -154,14 +163,19 @@ class ConfigurationMaintenanceTest {
         assertEquals(8, repaired.getInt("optimize-module.queue.max-jobs-per-run"));
         assertEquals(32, repaired.getInt("optimize-module.queue.global-max-jobs-per-tick"));
         assertEquals(8, repaired.getInt("optimize-module.queue.max-scheduler-submissions-per-tick"));
-        assertEquals(4096, repaired.getInt("optimize-module.queue.max-pending-jobs"));
+        assertEquals(8192, repaired.getInt("optimize-module.queue.max-pending-jobs"));
         assertTrue(repaired.getBoolean("optimize-module.queue.coalesce-duplicates"));
+        assertTrue(repaired.getBoolean("optimize-module.queue.per-scope-pacing.enable"));
+        assertEquals("FARMER", repaired.getString("optimize-module.queue.per-scope-pacing.scope"));
+        assertEquals(2, repaired.getInt("optimize-module.queue.per-scope-pacing.delay-ticks"));
         assertEquals(200, repaired.getInt("optimize-module.tracking.reconcile-interval-ticks"));
         assertEquals(4096, repaired.getInt("optimize-module.tracking.max-pending-scans"));
         assertEquals("EVENT_DRIVEN", repaired.getString("optimize-module.tracking.mode"));
         assertTrue(repaired.getBoolean(
                 "optimize-module.tracking.conditions.scan-on-player-chunk-load"));
         assertEquals(32, repaired.getInt("optimize-module.tracking.max-sections-per-second"));
+        assertEquals(512, repaired.getInt("optimize-module.tracking.max-candidates-per-scan"));
+        assertEquals(32, repaired.getInt("optimize-module.tracking.max-candidate-admissions-per-tick"));
         assertEquals(35.0, repaired.getDouble("optimize-module.adaptive-backpressure.slowdown-above-mspt"));
         assertEquals(45.0, repaired.getDouble("optimize-module.adaptive-backpressure.pause-above-mspt"));
         assertEquals(40.0, repaired.getDouble("optimize-module.adaptive-backpressure.resume-below-mspt"));
@@ -170,7 +184,7 @@ class ConfigurationMaintenanceTest {
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(7, repaired.getInt("config-version"));
+        assertEquals(8, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 

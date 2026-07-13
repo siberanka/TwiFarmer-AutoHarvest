@@ -23,8 +23,9 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Globally budgeted, fair per-chunk harvest queue. Queue overflow is deferred
- * to reconciliation and never converted into an unbounded scheduler task.
+ * Globally budgeted, fair per-chunk and per-Farmer harvest queue. Queue
+ * overflow is deferred to reconciliation and never converted into an
+ * unbounded scheduler task.
  */
 public final class OptimizedHarvestQueue {
 
@@ -32,6 +33,7 @@ public final class OptimizedHarvestQueue {
 
     private final ConcurrentMap<ChunkKey, ChunkQueue> queues = new ConcurrentHashMap<>();
     private final ConcurrentMap<BlockKey, Boolean> pendingBlocks = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ScopeState> scopes = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<ReadyQueue> readyQueues = new ConcurrentLinkedQueue<>();
     private final AtomicInteger pendingJobs = new AtomicInteger();
     private final AtomicInteger globalPermits = new AtomicInteger();
@@ -51,6 +53,7 @@ public final class OptimizedHarvestQueue {
     private volatile TelemetrySettings telemetry = TelemetrySettings.DISABLED;
     private volatile ScheduledTask ticker;
     private volatile Logger logger;
+    private volatile ChunkDrainListener chunkDrainListener;
 
     public void configure(
             @NotNull OptimizationSettings nextSettings,
@@ -68,6 +71,26 @@ public final class OptimizedHarvestQueue {
     public @NotNull SubmitResult submit(
             @NotNull Plugin plugin,
             @NotNull Location location,
+            @NotNull Runnable action,
+            @NotNull Logger operationLogger
+    ) {
+        if (!settings.enabled()) {
+            return SubmitResult.STOPPED;
+        }
+        World world = location.getWorld();
+        if (world == null) {
+            deferredJobs.increment();
+            return SubmitResult.DEFERRED;
+        }
+        String chunkScope = "chunk:" + world.getUID() + ':'
+                + (location.getBlockX() >> 4) + ':' + (location.getBlockZ() >> 4);
+        return submit(plugin, location, chunkScope, action, operationLogger);
+    }
+
+    public @NotNull SubmitResult submit(
+            @NotNull Plugin plugin,
+            @NotNull Location location,
+            @NotNull String scopeKey,
             @NotNull Runnable action,
             @NotNull Logger operationLogger
     ) {
@@ -96,8 +119,9 @@ public final class OptimizedHarvestQueue {
             return SubmitResult.DEFERRED;
         }
 
+        ScopeState scope = retainScope(scopeKey);
         ChunkKey chunkKey = new ChunkKey(world.getUID(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
-        QueueJob job = new QueueJob(blockKey, action);
+        QueueJob job = new QueueJob(blockKey, scopeKey, scope, action);
         ChunkQueue queue;
         boolean ready = false;
         while (true) {
@@ -128,6 +152,14 @@ public final class OptimizedHarvestQueue {
         return SubmitResult.ENQUEUED;
     }
 
+    public void setChunkDrainListener(ChunkDrainListener listener) {
+        chunkDrainListener = listener;
+    }
+
+    public boolean hasPendingJobs(@NotNull UUID worldId, int chunkX, int chunkZ) {
+        return queues.containsKey(new ChunkKey(worldId, chunkX, chunkZ));
+    }
+
     public void clear() {
         synchronized (tickerLock) {
             ScheduledTask currentTicker = ticker;
@@ -142,13 +174,14 @@ public final class OptimizedHarvestQueue {
         queues.clear();
         readyQueues.clear();
         pendingBlocks.clear();
+        scopes.clear();
         pendingJobs.set(0);
         globalPermits.set(0);
         dispatcherTicks.set(0L);
     }
 
     public @NotNull QueueStats stats() {
-        return new QueueStats(pendingJobs.get(), queues.size(), processedJobs.sum(), deferredJobs.sum(),
+        return new QueueStats(pendingJobs.get(), queues.size(), scopes.size(), processedJobs.sum(), deferredJobs.sum(),
                 coalescedJobs.sum(), schedulerFailures.sum(), pausedTicks.sum());
     }
 
@@ -209,6 +242,12 @@ public final class OptimizedHarvestQueue {
                     readyQueues.offer(ready);
                     continue;
                 }
+                QueueJob nextJob = queue.jobs.peekFirst();
+                long scopeReadyAt = scopeReadyAtTick(nextJob, current);
+                if (scopeReadyAt > currentTick) {
+                    readyQueues.offer(new ReadyQueue(ready.key(), queue, scopeReadyAt));
+                    continue;
+                }
                 queue.ready = false;
                 queue.scheduled = true;
             }
@@ -254,6 +293,18 @@ public final class OptimizedHarvestQueue {
         while (processed < runLimit && acquireGlobalPermit()) {
             QueueJob job;
             synchronized (queue) {
+                job = queue.jobs.peekFirst();
+            }
+            if (job == null) {
+                globalPermits.incrementAndGet();
+                break;
+            }
+            long currentTick = dispatcherTicks.get();
+            if (!acquireScopePermit(job, current, currentTick)) {
+                globalPermits.incrementAndGet();
+                break;
+            }
+            synchronized (queue) {
                 job = queue.jobs.pollFirst();
             }
             if (job == null) {
@@ -288,11 +339,20 @@ public final class OptimizedHarvestQueue {
             }
         }
         if (hasMore) {
-            readyQueues.offer(new ReadyQueue(key, queue, readyAtTick(current.continuationDelayTicks())));
+            QueueJob nextJob;
+            synchronized (queue) {
+                nextJob = queue.jobs.peekFirst();
+            }
+            long readyAt = Math.max(readyAtTick(current.continuationDelayTicks()),
+                    scopeReadyAtTick(nextJob, current));
+            readyQueues.offer(new ReadyQueue(key, queue, readyAt));
             Logger currentLogger = logger;
             if (currentLogger != null) {
                 ensureTicker(plugin, currentLogger);
             }
+        }
+        else {
+            notifyChunkDrained(key);
         }
     }
 
@@ -362,7 +422,61 @@ public final class OptimizedHarvestQueue {
 
     private void releaseJob(QueueJob job) {
         pendingBlocks.remove(job.blockKey());
+        scopes.computeIfPresent(job.scopeKey(), (key, current) -> {
+            if (current != job.scope()) {
+                return current;
+            }
+            current.pendingJobs--;
+            return current.pendingJobs <= 0 ? null : current;
+        });
         pendingJobs.updateAndGet(current -> Math.max(0, current - 1));
+    }
+
+    private ScopeState retainScope(String scopeKey) {
+        return scopes.compute(scopeKey, (key, current) -> {
+            ScopeState state = current == null ? new ScopeState() : current;
+            state.pendingJobs++;
+            return state;
+        });
+    }
+
+    private boolean acquireScopePermit(QueueJob job, OptimizationSettings current, long currentTick) {
+        if (!current.perScopePacingEnabled()) {
+            return true;
+        }
+        AtomicLong nextAllowedTick = job.scope().nextAllowedTick;
+        while (true) {
+            long next = nextAllowedTick.get();
+            if (next > currentTick) {
+                return false;
+            }
+            if (nextAllowedTick.compareAndSet(next, currentTick + current.perScopeDelayTicks())) {
+                return true;
+            }
+        }
+    }
+
+    private long scopeReadyAtTick(QueueJob job, OptimizationSettings current) {
+        if (job == null || !current.perScopePacingEnabled()) {
+            return 0L;
+        }
+        return job.scope().nextAllowedTick.get();
+    }
+
+    private void notifyChunkDrained(ChunkKey key) {
+        ChunkDrainListener listener = chunkDrainListener;
+        if (listener == null) {
+            return;
+        }
+        try {
+            listener.onChunkDrained(key.worldId(), key.chunkX(), key.chunkZ());
+        }
+        catch (RuntimeException exception) {
+            Logger currentLogger = logger;
+            if (currentLogger != null) {
+                currentLogger.log(Level.WARNING, "AutoHarvest rejected a chunk-drain callback.", exception);
+            }
+        }
     }
 
     private long readyAtTick(int delayTicks) {
@@ -390,7 +504,8 @@ public final class OptimizedHarvestQueue {
             QueueStats stats = stats();
             if (stats.pendingJobs() > 0 || stats.deferredJobs() > 0 || stats.schedulerFailures() > 0) {
                 currentLogger.info("AutoHarvest queue: pending=" + stats.pendingJobs()
-                        + ", chunks=" + stats.pendingChunks() + ", processed=" + stats.processedJobs()
+                        + ", chunks=" + stats.pendingChunks() + ", scopes=" + stats.pendingScopes()
+                        + ", processed=" + stats.processedJobs()
                         + ", deferred=" + stats.deferredJobs() + ", coalesced=" + stats.coalescedJobs()
                         + ", scheduler-failures=" + stats.schedulerFailures()
                         + ", work-percent=" + backpressure.workScalePercent()
@@ -409,6 +524,7 @@ public final class OptimizedHarvestQueue {
     public record QueueStats(
             int pendingJobs,
             int pendingChunks,
+            int pendingScopes,
             long processedJobs,
             long deferredJobs,
             long coalescedJobs,
@@ -417,13 +533,18 @@ public final class OptimizedHarvestQueue {
     ) {
     }
 
+    @FunctionalInterface
+    public interface ChunkDrainListener {
+        void onChunkDrained(@NotNull UUID worldId, int chunkX, int chunkZ);
+    }
+
     private record ChunkKey(UUID worldId, int chunkX, int chunkZ) {
     }
 
     private record BlockKey(UUID worldId, int blockX, int blockY, int blockZ) {
     }
 
-    private record QueueJob(BlockKey blockKey, Runnable action) {
+    private record QueueJob(BlockKey blockKey, String scopeKey, ScopeState scope, Runnable action) {
     }
 
     private record ReadyQueue(ChunkKey key, ChunkQueue queue, long readyAtTick) {
@@ -438,5 +559,10 @@ public final class OptimizedHarvestQueue {
         private ChunkQueue(Location anchor) {
             this.anchor = anchor;
         }
+    }
+
+    private static final class ScopeState {
+        private final AtomicLong nextAllowedTick = new AtomicLong();
+        private int pendingJobs;
     }
 }

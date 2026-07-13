@@ -65,6 +65,7 @@ public final class CropTrackingService implements Listener {
     private final ConcurrentLinkedQueue<ScanWork> sliceQueue = new ConcurrentLinkedQueue<>();
     private final Set<ChunkKey> pendingScans = ConcurrentHashMap.newKeySet();
     private final BoundedRememberedSet<ChunkKey> dormantChunks = new BoundedRememberedSet<>();
+    private final BoundedRememberedSet<ChunkKey> denseChunks = new BoundedRememberedSet<>();
     private final AtomicInteger pendingScanCount = new AtomicInteger();
     private final AtomicInteger activeScans = new AtomicInteger();
     private final AtomicInteger blockPermits = new AtomicInteger();
@@ -138,6 +139,7 @@ public final class CropTrackingService implements Listener {
         sliceQueue.clear();
         pendingScans.clear();
         dormantChunks.clear();
+        denseChunks.clear();
         pendingScanCount.set(0);
         activeScans.set(0);
         blockPermits.set(0);
@@ -172,6 +174,7 @@ public final class CropTrackingService implements Listener {
         ChunkKey key = new ChunkKey(event.getWorld().getUID(), event.getChunk().getX(), event.getChunk().getZ());
         boolean known = untrack(key);
         known |= loadedChunks.remove(key) != null;
+        denseChunks.take(key);
         if (known) {
             dormantChunks.remember(key, settings.maxTrackedChunks());
         }
@@ -367,7 +370,7 @@ public final class CropTrackingService implements Listener {
                 order.offer(tracked);
                 orderEntries.incrementAndGet();
                 World world = Bukkit.getWorld(key.worldId());
-                if (world != null) {
+                if (world != null && !module.hasPendingHarvests(key.worldId(), key.chunkX(), key.chunkZ())) {
                     requestScan(world, key.chunkX(), key.chunkZ(), false);
                 }
             }
@@ -474,7 +477,7 @@ public final class CropTrackingService implements Listener {
                 blockPermits.addAndGet(unused);
             }
             if (slice.complete()) {
-                completeScan(work, ChunkCropScanner.result(work.cursor()));
+                completeScan(work, ChunkCropScanner.result(work.cursor()), current, generation);
             }
             else {
                 sliceQueue.offer(work);
@@ -488,8 +491,12 @@ public final class CropTrackingService implements Listener {
         }
     }
 
-    private void completeScan(ScanWork work, ChunkCropScanner.ScanResult result) {
-        TrackingSettings current = settings;
+    private void completeScan(
+            ScanWork work,
+            ChunkCropScanner.ScanResult result,
+            TrackingSettings current,
+            long generation
+    ) {
         if (result.containsCrop() && !current.reconcilesLoadedChunks()) {
             track(work.key());
         }
@@ -497,15 +504,99 @@ public final class CropTrackingService implements Listener {
             untrack(work.key());
         }
 
-        int baseX = work.key().chunkX() << 4;
-        int baseZ = work.key().chunkZ() << 4;
-        for (ChunkCropScanner.CropCandidate candidate : result.candidates()) {
-            Location location = new Location(work.world(),
-                    baseX + candidate.localX(), candidate.y(), baseZ + candidate.localZ());
-            harvestHandler.scheduleCandidate(location, candidate.material());
+        if (result.candidates().isEmpty()) {
+            denseChunks.take(work.key());
+            completedScans.increment();
+            finishScan(work.key());
+            return;
+        }
+        scheduleCandidateAdmission(new CandidateAdmission(
+                work.world(), work.key(), result.candidates(), 0, result.candidateLimitReached()),
+                current, generation, 1L);
+    }
+
+    private void scheduleCandidateAdmission(
+            CandidateAdmission admission,
+            TrackingSettings current,
+            long generation,
+            long delayTicks
+    ) {
+        try {
+            Bukkit.getRegionScheduler().runDelayed(plugin, admission.world(),
+                    admission.key().chunkX(), admission.key().chunkZ(),
+                    ignored -> admitCandidateSlice(admission, current, generation), delayTicks);
+        }
+        catch (RuntimeException exception) {
+            retainForReconciliation(admission.key());
+            finishScan(admission.key());
+            logFailure("could not schedule a candidate admission slice", exception);
+        }
+    }
+
+    private void admitCandidateSlice(
+            CandidateAdmission admission,
+            TrackingSettings current,
+            long generation
+    ) {
+        try {
+            admitCandidateSliceSafely(admission, current, generation);
+        }
+        catch (RuntimeException exception) {
+            retainForReconciliation(admission.key());
+            finishScan(admission.key());
+            logFailure("rejected a candidate admission slice", exception);
+        }
+    }
+
+    private void admitCandidateSliceSafely(
+            CandidateAdmission admission,
+            TrackingSettings current,
+            long generation
+    ) {
+        if (!running || !module.isActiveGeneration(generation)
+                || !admission.world().isChunkLoaded(admission.key().chunkX(), admission.key().chunkZ())) {
+            finishScan(admission.key());
+            return;
+        }
+        int workPercent = backpressure.workScalePercent();
+        if (workPercent <= 0) {
+            scheduleCandidateAdmission(admission, current, generation, 20L);
+            return;
+        }
+        int limit = AdaptiveBackpressure.scaleLimit(current.maxCandidateAdmissionsPerTick(), workPercent);
+        int end = Math.min(admission.candidates().size(), admission.nextIndex() + limit);
+        int baseX = admission.key().chunkX() << 4;
+        int baseZ = admission.key().chunkZ() << 4;
+        for (int index = admission.nextIndex(); index < end; index++) {
+            ChunkCropScanner.CropCandidate candidate = admission.candidates().get(index);
+            harvestHandler.scheduleCandidate(new Location(admission.world(),
+                    baseX + candidate.localX(), candidate.y(), baseZ + candidate.localZ()),
+                    candidate.material());
+        }
+        if (end < admission.candidates().size()) {
+            scheduleCandidateAdmission(new CandidateAdmission(admission.world(), admission.key(),
+                    admission.candidates(), end, admission.dense()), current, generation, 1L);
+            return;
+        }
+        if (admission.dense()) {
+            denseChunks.remember(admission.key(), current.maxTrackedChunks());
+        }
+        else {
+            denseChunks.take(admission.key());
         }
         completedScans.increment();
-        finishScan(work.key());
+        finishScan(admission.key());
+    }
+
+    public void onHarvestQueueDrained(@NotNull UUID worldId, int chunkX, int chunkZ) {
+        ChunkKey key = new ChunkKey(worldId, chunkX, chunkZ);
+        if (!running || !denseChunks.take(key)) {
+            return;
+        }
+        World world = Bukkit.getWorld(worldId);
+        if (world != null) {
+            requestScan(world, chunkX, chunkZ, true);
+        }
     }
 
     private void requestScan(World world, int chunkX, int chunkZ, boolean wake) {
@@ -720,7 +811,7 @@ public final class CropTrackingService implements Listener {
             Main.getInstance().getLogger().info("AutoHarvest tracking: mode=" + settings.mode()
                     + ", pending=" + pendingScanCount.get() + ", active=" + activeScans.get()
                     + ", tracked=" + trackedChunks.size() + ", loaded=" + loadedChunks.size()
-                    + ", dormant=" + dormantChunks.size()
+                    + ", dormant=" + dormantChunks.size() + ", dense=" + denseChunks.size()
                     + ", completed=" + completedScans.sum() + ", blocks=" + scannedBlocks.sum()
                     + ", dropped=" + droppedScanRequests.sum()
                     + ", work-percent=" + backpressure.workScalePercent()
@@ -750,6 +841,15 @@ public final class CropTrackingService implements Listener {
             ChunkKey key,
             ChunkSnapshot snapshot,
             ChunkCropScanner.ScanCursor cursor
+    ) {
+    }
+
+    private record CandidateAdmission(
+            World world,
+            ChunkKey key,
+            List<ChunkCropScanner.CropCandidate> candidates,
+            int nextIndex,
+            boolean dense
     ) {
     }
 }
