@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.3.0.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.4.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -69,6 +69,7 @@ optimize-module:
       scan-on-chunk-load: false
       scan-on-farmer-purchase: true
       scan-on-player-join: true
+      scan-on-player-chunk-load: true
       farmer-regions-only: true
     reconcile-interval-ticks: 200
     max-chunks-per-cycle: 2
@@ -84,8 +85,10 @@ optimize-module:
     bootstrap-radius-chunks: 3
   adaptive-backpressure:
     enable: true
+    slowdown-above-mspt: 35.0
     pause-above-mspt: 45.0
     resume-below-mspt: 40.0
+    minimum-work-percent: 10
     check-interval-ticks: 20
     pause-above-region-task-delay-millis: 100
     region-cooldown-ticks: 100
@@ -94,9 +97,9 @@ optimize-module:
     log-interval-seconds: 300
 ```
 
-The most important hard limits are global, not per chunk: `global-max-jobs-per-tick` caps harvest actions across every world and Folia region, `max-scheduler-submissions-per-tick` caps region task fan-out, and `max-sections-per-second` caps primary snapshot block reads in 4096-block units. `max-block-checks-per-slice` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests bounded reconciliation; it never bypasses limits with a direct task.
+The most important hard limits are global, not per chunk: `global-max-jobs-per-tick` caps harvest actions across every world and Folia region, `max-scheduler-submissions-per-tick` caps region task fan-out, and `max-sections-per-second` caps primary snapshot block reads in 4096-block units. `max-block-checks-per-slice` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests bounded reconciliation; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
 
-Adaptive backpressure uses Paper's rolling MSPT with hysteresis. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Telemetry logs cumulative queue/scan counters only at the configured low frequency and only when useful work, deferral, or failure exists.
+Adaptive backpressure uses Paper's rolling MSPT with hysteresis. Above `slowdown-above-mspt`, it gradually scales harvest jobs, region scheduler submissions, reconciliation chunks, snapshot captures, scan starts, section reads, and async slice sizes down toward `minimum-work-percent`. At `pause-above-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Telemetry logs cumulative queue/scan counters only at the configured low frequency and only when useful work, deferral, or failure exists.
 
 The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or reconciliation is due.
 
@@ -107,9 +110,9 @@ Snapshot section indexes are translated relative to the world's minimum build he
 - `EVENT_DRIVEN` is the default. Growth/fertilize signals harvest immediately, while only known crop or deferred chunks receive slow reconciliation.
 - `PERIODIC_LOADED_CHUNKS` disables immediate growth harvesting and rotates through a bounded registry of known loaded chunks.
 - `HYBRID` combines immediate events with bounded loaded-chunk rotation.
-- Every signal under `tracking.conditions` can be enabled independently. On large servers, keep `scan-on-chunk-load: false` unless periodic discovery is explicitly required.
+- Every signal under `tracking.conditions` can be enabled independently. On large servers, keep broad `scan-on-chunk-load: false`; `scan-on-player-chunk-load: true` performs bounded, near-player discovery only when the player is inside an enabled Farmer region.
 - With `farmer-regions-only: true`, event and player bootstrap tracking is accepted only around an enabled Farmer (or when `withoutFarmer` is active). Set it to `false` if periodic mode must discover chunk-loader farms with no nearby player.
-- Farmer purchase and GUI enable scans are nearest-first and inspect only chunks already sent to the player. Chunk unload, module reload, and disable remove or invalidate queued state.
+- Farmer purchase and GUI enable scans are nearest-first and inspect only chunks already sent to the player. Known crop chunks move into a size-bounded dormant registry on unload and are rescanned when loaded again, so leaving and returning to a farm does not require toggling AutoHarvest. Module reload and disable invalidate all queued state.
 
 ## Stacked Crops
 

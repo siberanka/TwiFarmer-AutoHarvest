@@ -110,7 +110,7 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= repairInteger(configuration, defaults, "config-version", 6, 6);
+        changed |= repairInteger(configuration, defaults, "config-version", 7, 7);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -152,6 +152,7 @@ public final class ConfigurationMaintenance {
         changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-chunk-load");
         changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-farmer-purchase");
         changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-player-join");
+        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-player-chunk-load");
         changed |= repairBoolean(configuration, defaults, CONDITIONS + ".farmer-regions-only");
         changed |= repairInteger(configuration, defaults, TRACKING + ".reconcile-interval-ticks", 20, 72_000);
         changed |= repairInteger(configuration, defaults, TRACKING + ".max-chunks-per-cycle", 1, 32);
@@ -166,8 +167,10 @@ public final class ConfigurationMaintenance {
         changed |= repairInteger(configuration, defaults, TRACKING + ".purchase-radius-chunks", 1, 32);
         changed |= repairInteger(configuration, defaults, TRACKING + ".bootstrap-radius-chunks", 1, 16);
         changed |= repairBoolean(configuration, defaults, BACKPRESSURE + ".enable");
+        changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".slowdown-above-mspt", 10.0, 99.0);
         changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".pause-above-mspt", 20.0, 100.0);
         changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".resume-below-mspt", 10.0, 99.0);
+        changed |= repairInteger(configuration, defaults, BACKPRESSURE + ".minimum-work-percent", 1, 100);
         changed |= repairInteger(configuration, defaults, BACKPRESSURE + ".check-interval-ticks", 1, 200);
         changed |= repairInteger(configuration, defaults,
                 BACKPRESSURE + ".pause-above-region-task-delay-millis", 50, 5_000);
@@ -176,7 +179,11 @@ public final class ConfigurationMaintenance {
         changed |= repairInteger(configuration, defaults, TELEMETRY + ".log-interval-seconds", 30, 3_600);
 
         if (configuration.getDouble(BACKPRESSURE + ".resume-below-mspt")
+                >= configuration.getDouble(BACKPRESSURE + ".pause-above-mspt")
+                || configuration.getDouble(BACKPRESSURE + ".slowdown-above-mspt")
                 >= configuration.getDouble(BACKPRESSURE + ".pause-above-mspt")) {
+            configuration.set(BACKPRESSURE + ".slowdown-above-mspt",
+                    defaults.getDouble(BACKPRESSURE + ".slowdown-above-mspt"));
             configuration.set(BACKPRESSURE + ".pause-above-mspt",
                     defaults.getDouble(BACKPRESSURE + ".pause-above-mspt"));
             configuration.set(BACKPRESSURE + ".resume-below-mspt",
@@ -379,6 +386,7 @@ public final class ConfigurationMaintenance {
                 configuration.getBoolean(CONDITIONS + ".scan-on-chunk-load"),
                 configuration.getBoolean(CONDITIONS + ".scan-on-farmer-purchase"),
                 configuration.getBoolean(CONDITIONS + ".scan-on-player-join"),
+                configuration.getBoolean(CONDITIONS + ".scan-on-player-chunk-load"),
                 configuration.getBoolean(CONDITIONS + ".farmer-regions-only"),
                 configuration.getInt(TRACKING + ".reconcile-interval-ticks"),
                 configuration.getInt(TRACKING + ".max-chunks-per-cycle"),
@@ -398,8 +406,10 @@ public final class ConfigurationMaintenance {
     private static BackpressureSettings readBackpressureSettings(YamlConfiguration configuration) {
         return new BackpressureSettings(
                 configuration.getBoolean(BACKPRESSURE + ".enable"),
+                configuration.getDouble(BACKPRESSURE + ".slowdown-above-mspt"),
                 configuration.getDouble(BACKPRESSURE + ".pause-above-mspt"),
                 configuration.getDouble(BACKPRESSURE + ".resume-below-mspt"),
+                configuration.getInt(BACKPRESSURE + ".minimum-work-percent"),
                 configuration.getInt(BACKPRESSURE + ".check-interval-ticks"),
                 configuration.getInt(BACKPRESSURE + ".pause-above-region-task-delay-millis"),
                 configuration.getInt(BACKPRESSURE + ".region-cooldown-ticks")

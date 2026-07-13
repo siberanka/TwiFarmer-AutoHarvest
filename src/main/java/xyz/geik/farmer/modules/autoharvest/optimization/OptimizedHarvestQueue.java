@@ -181,17 +181,21 @@ public final class OptimizedHarvestQueue {
             return;
         }
 
-        globalPermits.set(current.globalMaxJobsPerTick());
         long currentTick = dispatcherTicks.incrementAndGet();
-        if (!backpressure.permitsWork()) {
+        int workPercent = backpressure.workScalePercent();
+        if (workPercent <= 0) {
+            globalPermits.set(0);
             pausedTicks.increment();
             logTelemetry();
             return;
         }
+        globalPermits.set(AdaptiveBackpressure.scaleLimit(current.globalMaxJobsPerTick(), workPercent));
 
-        int attempts = Math.min(queues.size(), current.maxSchedulerSubmissionsPerTick() * 4);
+        int submissionLimit = AdaptiveBackpressure.scaleLimit(
+                current.maxSchedulerSubmissionsPerTick(), workPercent);
+        int attempts = Math.min(queues.size(), submissionLimit * 4);
         int submitted = 0;
-        while (attempts-- > 0 && submitted < current.maxSchedulerSubmissionsPerTick()) {
+        while (attempts-- > 0 && submitted < submissionLimit) {
             ReadyQueue ready = readyQueues.poll();
             if (ready == null) {
                 break;
@@ -245,8 +249,9 @@ public final class OptimizedHarvestQueue {
             return;
         }
 
+        int runLimit = backpressure.scaleLimit(current.maxJobsPerRun());
         int processed = 0;
-        while (processed < current.maxJobsPerRun() && acquireGlobalPermit()) {
+        while (processed < runLimit && acquireGlobalPermit()) {
             QueueJob job;
             synchronized (queue) {
                 job = queue.jobs.pollFirst();
@@ -388,6 +393,7 @@ public final class OptimizedHarvestQueue {
                         + ", chunks=" + stats.pendingChunks() + ", processed=" + stats.processedJobs()
                         + ", deferred=" + stats.deferredJobs() + ", coalesced=" + stats.coalescedJobs()
                         + ", scheduler-failures=" + stats.schedulerFailures()
+                        + ", work-percent=" + backpressure.workScalePercent()
                         + ", backpressure-paused=" + backpressure.isPaused());
             }
         }

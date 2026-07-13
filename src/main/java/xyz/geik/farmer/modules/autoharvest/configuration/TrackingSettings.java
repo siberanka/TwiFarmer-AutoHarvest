@@ -16,6 +16,7 @@ public record TrackingSettings(
         boolean scanOnChunkLoad,
         boolean scanOnFarmerPurchase,
         boolean scanOnPlayerJoin,
+        boolean scanOnPlayerChunkLoad,
         boolean farmerRegionsOnly,
         int reconcileIntervalTicks,
         int maxChunksPerCycle,
@@ -33,7 +34,7 @@ public record TrackingSettings(
 
     public static final TrackingSettings BASELINE = new TrackingSettings(
             TrackingMode.EVENT_DRIVEN,
-            true, true, true, false, true, true, true,
+            true, true, true, false, true, true, true, true,
             200, 1, 2_048, 1, 1, 2, 16, 4_096,
             512, 128, 8, 2
     );

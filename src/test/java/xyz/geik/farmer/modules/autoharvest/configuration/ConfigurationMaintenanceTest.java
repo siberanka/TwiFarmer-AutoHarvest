@@ -66,6 +66,9 @@ class ConfigurationMaintenanceTest {
         assertEquals(1, snapshot.tracking().maxConcurrentScans());
         assertEquals(128, snapshot.tracking().maxCandidatesPerScan());
         assertEquals(TrackingMode.EVENT_DRIVEN, snapshot.tracking().mode());
+        assertTrue(snapshot.tracking().scanOnPlayerChunkLoad());
+        assertEquals(35.0, snapshot.backpressure().slowdownAboveMspt());
+        assertEquals(10, snapshot.backpressure().minimumWorkPercent());
         assertTrue(snapshot.stackedCrops().enabled());
         assertEquals(List.of("SUGAR_CANE", "CACTUS", "BAMBOO", "KELP"),
                 snapshot.stackedCrops().items());
@@ -122,9 +125,13 @@ class ConfigurationMaintenanceTest {
                   tracking:
                     mode: "BROKEN"
                     max-sections-per-second: 9999
+                    conditions:
+                      scan-on-player-chunk-load: "yes"
                   adaptive-backpressure:
+                    slowdown-above-mspt: 60
                     pause-above-mspt: 30
                     resume-below-mspt: 40
+                    minimum-work-percent: 0
                 custom-extension: preserved
                 """, StandardCharsets.UTF_8);
 
@@ -152,14 +159,18 @@ class ConfigurationMaintenanceTest {
         assertEquals(200, repaired.getInt("optimize-module.tracking.reconcile-interval-ticks"));
         assertEquals(4096, repaired.getInt("optimize-module.tracking.max-pending-scans"));
         assertEquals("EVENT_DRIVEN", repaired.getString("optimize-module.tracking.mode"));
+        assertTrue(repaired.getBoolean(
+                "optimize-module.tracking.conditions.scan-on-player-chunk-load"));
         assertEquals(32, repaired.getInt("optimize-module.tracking.max-sections-per-second"));
+        assertEquals(35.0, repaired.getDouble("optimize-module.adaptive-backpressure.slowdown-above-mspt"));
         assertEquals(45.0, repaired.getDouble("optimize-module.adaptive-backpressure.pause-above-mspt"));
         assertEquals(40.0, repaired.getDouble("optimize-module.adaptive-backpressure.resume-below-mspt"));
+        assertEquals(10, repaired.getInt("optimize-module.adaptive-backpressure.minimum-work-percent"));
         assertTrue(repaired.getBoolean("update-checker.enable"));
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(6, repaired.getInt("config-version"));
+        assertEquals(7, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 

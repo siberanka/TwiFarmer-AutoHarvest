@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 6
+config-version: 7
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -83,6 +83,9 @@ optimize-module:
       scan-on-chunk-load: false
       scan-on-farmer-purchase: true
       scan-on-player-join: true
+      # Rechecks nearby chunks as Paper sends them to a player in an enabled Farmer area.
+      # This also resumes farms after walking away and returning without GUI toggles.
+      scan-on-player-chunk-load: true
       # Limits event tracking and player bootstrap to active Farmer areas.
       farmer-regions-only: true
     # EVENT_DRIVEN revisits known crop chunks; periodic modes rotate known loaded chunks.
@@ -110,10 +113,13 @@ optimize-module:
     # Loaded chunk radius reconciled for online players after enable/reload.
     bootstrap-radius-chunks: 3
   adaptive-backpressure:
-    # Pauses new harvest batches and scans when Paper reports sustained tick pressure.
+    # Gradually scales all global work budgets down before a full safety pause.
     enable: true
+    slowdown-above-mspt: 35.0
     pause-above-mspt: 45.0
     resume-below-mspt: 40.0
+    # Lowest budget percentage used between slowdown and pause thresholds.
+    minimum-work-percent: 10
     check-interval-ticks: 20
     # Folia/Leaf safeguard: pause when a region callback arrives this late.
     pause-above-region-task-delay-millis: 100

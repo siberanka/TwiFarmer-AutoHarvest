@@ -1,5 +1,6 @@
 package xyz.geik.farmer.modules.autoharvest.tracking;
 
+import io.papermc.paper.event.packet.PlayerChunkLoadEvent;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
@@ -63,6 +64,7 @@ public final class CropTrackingService implements Listener {
     private final ConcurrentLinkedQueue<ChunkKey> scanQueue = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<ScanWork> sliceQueue = new ConcurrentLinkedQueue<>();
     private final Set<ChunkKey> pendingScans = ConcurrentHashMap.newKeySet();
+    private final BoundedRememberedSet<ChunkKey> dormantChunks = new BoundedRememberedSet<>();
     private final AtomicInteger pendingScanCount = new AtomicInteger();
     private final AtomicInteger activeScans = new AtomicInteger();
     private final AtomicInteger blockPermits = new AtomicInteger();
@@ -106,7 +108,7 @@ public final class CropTrackingService implements Listener {
         running = true;
         long now = System.nanoTime();
         budgetWindowNanos = now;
-        blockPermits.set(sectionBlockBudget(nextSettings));
+        blockPermits.set(backpressure.scaleLimit(sectionBlockBudget(nextSettings)));
         nextReconcileNanos = now + ticksToNanos(nextSettings.reconcileIntervalTicks());
         nextTelemetryNanos = now + telemetrySettings.logIntervalSeconds() * SECOND_NANOS;
 
@@ -135,6 +137,7 @@ public final class CropTrackingService implements Listener {
         scanQueue.clear();
         sliceQueue.clear();
         pendingScans.clear();
+        dormantChunks.clear();
         pendingScanCount.set(0);
         activeScans.set(0);
         blockPermits.set(0);
@@ -146,6 +149,16 @@ public final class CropTrackingService implements Listener {
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onChunkLoad(@NotNull ChunkLoadEvent event) {
         TrackingSettings current = settings;
+        ChunkKey key = new ChunkKey(event.getWorld().getUID(), event.getChunk().getX(), event.getChunk().getZ());
+        if (dormantChunks.take(key)) {
+            if (current.reconcilesLoadedChunks()) {
+                trackLoaded(key);
+            }
+            else {
+                track(key);
+            }
+            requestScan(event.getWorld(), key.chunkX(), key.chunkZ(), true);
+        }
         if (current.reconcilesLoadedChunks() && !current.farmerRegionsOnly()) {
             trackLoaded(event.getChunk());
         }
@@ -157,8 +170,37 @@ public final class CropTrackingService implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onChunkUnload(@NotNull ChunkUnloadEvent event) {
         ChunkKey key = new ChunkKey(event.getWorld().getUID(), event.getChunk().getX(), event.getChunk().getZ());
-        untrack(key);
-        loadedChunks.remove(key);
+        boolean known = untrack(key);
+        known |= loadedChunks.remove(key) != null;
+        if (known) {
+            dormantChunks.remember(key, settings.maxTrackedChunks());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerChunkLoad(@NotNull PlayerChunkLoadEvent event) {
+        TrackingSettings current = settings;
+        if (!running || !current.scanOnPlayerChunkLoad()) {
+            return;
+        }
+        Player player = event.getPlayer();
+        Chunk chunk = event.getChunk();
+        Location playerLocation = player.getLocation();
+        int playerChunkX = playerLocation.getBlockX() >> 4;
+        int playerChunkZ = playerLocation.getBlockZ() >> 4;
+        if (Math.abs(chunk.getX() - playerChunkX) > current.bootstrapRadiusChunks()
+                || Math.abs(chunk.getZ() - playerChunkZ) > current.bootstrapRadiusChunks()) {
+            return;
+        }
+        if (!WorldHelper.isFarmerAllowed(chunk.getWorld().getName())
+                || (current.farmerRegionsOnly() && !module.isWithoutFarmer()
+                && !hasEnabledFarmer(playerLocation))) {
+            return;
+        }
+        if (current.reconcilesLoadedChunks()) {
+            trackLoaded(chunk);
+        }
+        requestScan(chunk.getWorld(), chunk.getX(), chunk.getZ(), true);
     }
 
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
@@ -279,28 +321,32 @@ public final class CropTrackingService implements Listener {
         }
         TrackingSettings current = settings;
         long now = System.nanoTime();
-        refillBudgets(current, now);
+        int workPercent = backpressure.workScalePercent();
+        refillBudgets(current, now, workPercent);
         if (now >= nextReconcileNanos) {
-            enqueueTracked(current.maxChunksPerCycle(), current.reconcilesLoadedChunks());
+            if (workPercent > 0) {
+                enqueueTracked(AdaptiveBackpressure.scaleLimit(current.maxChunksPerCycle(), workPercent),
+                        current.reconcilesLoadedChunks());
+            }
             nextReconcileNanos = now + ticksToNanos(current.reconcileIntervalTicks());
         }
 
-        if (backpressure.permitsWork()) {
-            dispatchCaptures(current, generation);
-            dispatchSlices(current, generation);
+        if (workPercent > 0) {
+            dispatchCaptures(current, generation, workPercent);
+            dispatchSlices(current, generation, workPercent);
         }
         else {
             pausedTicks.increment();
         }
         logTelemetry(now);
-        scheduleNextTick(current, now);
+        scheduleNextTick(current, now, workPercent);
     }
 
-    private void refillBudgets(TrackingSettings current, long now) {
+    private void refillBudgets(TrackingSettings current, long now, int workPercent) {
         if (now - budgetWindowNanos >= SECOND_NANOS) {
             budgetWindowNanos = now;
             scanStartsInWindow = 0;
-            blockPermits.set(sectionBlockBudget(current));
+            blockPermits.set(AdaptiveBackpressure.scaleLimit(sectionBlockBudget(current), workPercent));
         }
     }
 
@@ -328,11 +374,13 @@ public final class CropTrackingService implements Listener {
         }
     }
 
-    private void dispatchCaptures(TrackingSettings current, long generation) {
+    private void dispatchCaptures(TrackingSettings current, long generation, int workPercent) {
+        int captureLimit = AdaptiveBackpressure.scaleLimit(current.maxSnapshotCapturesPerTick(), workPercent);
+        int startLimit = AdaptiveBackpressure.scaleLimit(current.maxScanStartsPerSecond(), workPercent);
         int captures = 0;
-        while (captures < current.maxSnapshotCapturesPerTick()
+        while (captures < captureLimit
                 && activeScans.get() < current.maxConcurrentScans()
-                && scanStartsInWindow < current.maxScanStartsPerSecond()) {
+                && scanStartsInWindow < startLimit) {
             ChunkKey key = scanQueue.poll();
             if (key == null) {
                 return;
@@ -386,10 +434,11 @@ public final class CropTrackingService implements Listener {
         }
     }
 
-    private void dispatchSlices(TrackingSettings current, long generation) {
+    private void dispatchSlices(TrackingSettings current, long generation, int workPercent) {
+        int sliceLimit = AdaptiveBackpressure.scaleLimit(current.maxBlockChecksPerSlice(), workPercent);
         int attempts = sliceQueue.size();
         while (attempts-- > 0) {
-            int granted = reserveBlockPermits(current.maxBlockChecksPerSlice());
+            int granted = reserveBlockPermits(sliceLimit);
             if (granted <= 0) {
                 return;
             }
@@ -526,8 +575,8 @@ public final class CropTrackingService implements Listener {
         }
     }
 
-    private void untrack(ChunkKey key) {
-        trackedChunks.remove(key);
+    private boolean untrack(ChunkKey key) {
+        return trackedChunks.remove(key) != null;
     }
 
     private void retainForReconciliation(ChunkKey key) {
@@ -591,9 +640,10 @@ public final class CropTrackingService implements Listener {
         }
     }
 
-    private void scheduleNextTick(TrackingSettings current, long now) {
+    private void scheduleNextTick(TrackingSettings current, long now, int workPercent) {
+        int startLimit = AdaptiveBackpressure.scaleLimit(current.maxScanStartsPerSecond(), workPercent);
         boolean immediate = (!scanQueue.isEmpty() && activeScans.get() < current.maxConcurrentScans()
-                && scanStartsInWindow < current.maxScanStartsPerSecond())
+                && scanStartsInWindow < startLimit)
                 || (!sliceQueue.isEmpty() && blockPermits.get() > 0);
         if (immediate && !backpressure.isPaused()) {
             scheduleTick(1L);
@@ -670,8 +720,10 @@ public final class CropTrackingService implements Listener {
             Main.getInstance().getLogger().info("AutoHarvest tracking: mode=" + settings.mode()
                     + ", pending=" + pendingScanCount.get() + ", active=" + activeScans.get()
                     + ", tracked=" + trackedChunks.size() + ", loaded=" + loadedChunks.size()
+                    + ", dormant=" + dormantChunks.size()
                     + ", completed=" + completedScans.sum() + ", blocks=" + scannedBlocks.sum()
                     + ", dropped=" + droppedScanRequests.sum()
+                    + ", work-percent=" + backpressure.workScalePercent()
                     + ", backpressure-paused=" + backpressure.isPaused());
         }
     }
