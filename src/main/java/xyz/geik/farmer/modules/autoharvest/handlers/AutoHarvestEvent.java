@@ -101,8 +101,8 @@ public class AutoHarvestEvent implements Listener {
         }
         String chunkScope = chunkScope(world, location);
         OptimizationSettings settings = module.getActiveOptimizationSettings();
-        if (!settings.perScopePacingEnabled() || module.isWithoutFarmer()
-                || settings.pacingScope() == HarvestPacingScope.CHUNK) {
+        if (!settings.usesScopedThrottling() || module.isWithoutFarmer()
+                || settings.harvestScope() == HarvestPacingScope.CHUNK) {
             return chunkScope;
         }
         try {
@@ -117,7 +117,7 @@ public class AutoHarvestEvent implements Listener {
                 }
                 String owner = farmer.getOwnerUUID() == null
                         ? "unknown" : farmer.getOwnerUUID().toString();
-                return switch (settings.pacingScope()) {
+                return switch (settings.harvestScope()) {
                     case OWNER -> "owner:" + owner;
                     case FARMER -> "farmer:" + owner + ':' + farmer.getId();
                     case REGION -> "region:" + regionId;

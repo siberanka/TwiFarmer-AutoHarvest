@@ -40,7 +40,11 @@ public final class ConfigurationMaintenance {
     private static final DateTimeFormatter BACKUP_TIMESTAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmssSSS");
     private static final String OPTIMIZE_MODULE = "optimize-module";
+    private static final String HARVEST_CONTROL = OPTIMIZE_MODULE + ".harvest-control";
+    private static final String PER_HARVEST_DELAY = HARVEST_CONTROL + ".per-harvest-delay";
+    private static final String BATCH_PAUSE = HARVEST_CONTROL + ".batch-pause";
     private static final String QUEUE = OPTIMIZE_MODULE + ".queue";
+    private static final String LEGACY_SCOPE_PACING = QUEUE + ".per-scope-pacing";
     private static final String TRACKING = OPTIMIZE_MODULE + ".tracking";
     private static final String CONDITIONS = TRACKING + ".conditions";
     private static final String BACKPRESSURE = OPTIMIZE_MODULE + ".adaptive-backpressure";
@@ -110,7 +114,8 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= repairInteger(configuration, defaults, "config-version", 8, 8);
+        changed |= migrateLegacyScopePacing(configuration);
+        changed |= repairInteger(configuration, defaults, "config-version", 9, 9);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -131,25 +136,30 @@ public final class ConfigurationMaintenance {
         changed |= repairInteger(configuration, defaults, UPDATE_CHECKER + ".request-timeout-seconds", 3, 60);
 
         changed |= ensureSection(configuration, OPTIMIZE_MODULE);
+        changed |= ensureSection(configuration, HARVEST_CONTROL);
+        changed |= ensureSection(configuration, PER_HARVEST_DELAY);
+        changed |= ensureSection(configuration, BATCH_PAUSE);
         changed |= ensureSection(configuration, QUEUE);
         changed |= ensureSection(configuration, TRACKING);
         changed |= ensureSection(configuration, CONDITIONS);
         changed |= ensureSection(configuration, BACKPRESSURE);
         changed |= ensureSection(configuration, TELEMETRY);
         changed |= repairBoolean(configuration, defaults, OPTIMIZE_MODULE + ".enable");
+        changed |= repairInteger(configuration, defaults,
+                HARVEST_CONTROL + ".global-max-harvests-per-tick", 1, 256);
+        changed |= repairString(configuration, defaults, HARVEST_CONTROL + ".scope",
+                ConfigurationMaintenance::isHarvestPacingScope);
+        changed |= repairBoolean(configuration, defaults, PER_HARVEST_DELAY + ".enable");
+        changed |= repairInteger(configuration, defaults, PER_HARVEST_DELAY + ".ticks", 1, 200);
+        changed |= repairBoolean(configuration, defaults, BATCH_PAUSE + ".enable");
+        changed |= repairInteger(configuration, defaults, BATCH_PAUSE + ".harvests-before-pause", 1, 10_000);
+        changed |= repairInteger(configuration, defaults, BATCH_PAUSE + ".pause-ticks", 1, 72_000);
         changed |= repairInteger(configuration, defaults, QUEUE + ".initial-delay-ticks", 1, 20);
         changed |= repairInteger(configuration, defaults, QUEUE + ".continuation-delay-ticks", 1, 20);
         changed |= repairInteger(configuration, defaults, QUEUE + ".max-jobs-per-run", 1, 64);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".global-max-jobs-per-tick", 1, 256);
         changed |= repairInteger(configuration, defaults, QUEUE + ".max-scheduler-submissions-per-tick", 1, 64);
         changed |= repairInteger(configuration, defaults, QUEUE + ".max-pending-jobs", 64, 16_384);
         changed |= repairBoolean(configuration, defaults, QUEUE + ".coalesce-duplicates");
-        changed |= ensureSection(configuration, QUEUE + ".per-scope-pacing");
-        changed |= repairBoolean(configuration, defaults, QUEUE + ".per-scope-pacing.enable");
-        changed |= repairString(configuration, defaults, QUEUE + ".per-scope-pacing.scope",
-                ConfigurationMaintenance::isHarvestPacingScope);
-        changed |= repairInteger(configuration, defaults,
-                QUEUE + ".per-scope-pacing.delay-ticks", 1, 200);
         changed |= repairString(configuration, defaults, TRACKING + ".mode",
                 value -> isTrackingMode(value));
         changed |= repairBoolean(configuration, defaults, CONDITIONS + ".growth-events");
@@ -221,6 +231,32 @@ public final class ConfigurationMaintenance {
         changed |= repairString(configuration, defaults, "update.available",
                 value -> hasPlaceholders(value, "{module}", "{current}", "{latest}", "{url}"));
         return changed;
+    }
+
+    private static boolean migrateLegacyScopePacing(YamlConfiguration configuration) {
+        boolean changed = false;
+        String legacyGlobalLimit = QUEUE + ".global-max-jobs-per-tick";
+        String globalLimit = HARVEST_CONTROL + ".global-max-harvests-per-tick";
+        if (configuration.contains(legacyGlobalLimit)) {
+            copyIfMissing(configuration, legacyGlobalLimit, globalLimit);
+            configuration.set(legacyGlobalLimit, null);
+            changed = true;
+        }
+
+        if (configuration.isConfigurationSection(LEGACY_SCOPE_PACING)) {
+            copyIfMissing(configuration, LEGACY_SCOPE_PACING + ".scope", HARVEST_CONTROL + ".scope");
+            copyIfMissing(configuration, LEGACY_SCOPE_PACING + ".enable", PER_HARVEST_DELAY + ".enable");
+            copyIfMissing(configuration, LEGACY_SCOPE_PACING + ".delay-ticks", PER_HARVEST_DELAY + ".ticks");
+            configuration.set(LEGACY_SCOPE_PACING, null);
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static void copyIfMissing(YamlConfiguration configuration, String source, String target) {
+        if (!configuration.contains(target) && configuration.contains(source)) {
+            configuration.set(target, configuration.get(source));
+        }
     }
 
     private static boolean repairBoolean(YamlConfiguration configuration, YamlConfiguration defaults, String path) {
@@ -378,13 +414,16 @@ public final class ConfigurationMaintenance {
                 configuration.getInt(QUEUE + ".initial-delay-ticks"),
                 configuration.getInt(QUEUE + ".continuation-delay-ticks"),
                 configuration.getInt(QUEUE + ".max-jobs-per-run"),
-                configuration.getInt(QUEUE + ".global-max-jobs-per-tick"),
+                configuration.getInt(HARVEST_CONTROL + ".global-max-harvests-per-tick"),
                 configuration.getInt(QUEUE + ".max-scheduler-submissions-per-tick"),
                 configuration.getInt(QUEUE + ".max-pending-jobs"),
                 configuration.getBoolean(QUEUE + ".coalesce-duplicates"),
-                configuration.getBoolean(QUEUE + ".per-scope-pacing.enable"),
-                HarvestPacingScope.parse(configuration.getString(QUEUE + ".per-scope-pacing.scope")),
-                configuration.getInt(QUEUE + ".per-scope-pacing.delay-ticks")
+                HarvestPacingScope.parse(configuration.getString(HARVEST_CONTROL + ".scope")),
+                configuration.getBoolean(PER_HARVEST_DELAY + ".enable"),
+                configuration.getInt(PER_HARVEST_DELAY + ".ticks"),
+                configuration.getBoolean(BATCH_PAUSE + ".enable"),
+                configuration.getInt(BATCH_PAUSE + ".harvests-before-pause"),
+                configuration.getInt(BATCH_PAUSE + ".pause-ticks")
         );
     }
 

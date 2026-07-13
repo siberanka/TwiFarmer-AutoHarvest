@@ -15,18 +15,27 @@ public record OptimizationSettings(
         int maxSchedulerSubmissionsPerTick,
         int maxPendingJobs,
         boolean coalesceDuplicates,
-        boolean perScopePacingEnabled,
-        HarvestPacingScope pacingScope,
-        int perScopeDelayTicks
+        HarvestPacingScope harvestScope,
+        boolean perHarvestDelayEnabled,
+        int perHarvestDelayTicks,
+        boolean batchPauseEnabled,
+        int harvestsBeforePause,
+        int batchPauseTicks
 ) {
 
     public static final OptimizationSettings DEFAULT = new OptimizationSettings(
-            false, 2, 1, 8, 32, 8, 8192, true, true, HarvestPacingScope.FARMER, 2
+            false, 2, 1, 8, 32, 8, 8192, true,
+            HarvestPacingScope.FARMER, false, 2, false, 64, 20
     );
 
     private static final OptimizationSettings BASELINE = new OptimizationSettings(
-            true, 2, 1, 4, 16, 4, 2048, true, true, HarvestPacingScope.FARMER, 3
+            true, 2, 1, 4, 16, 4, 2048, true,
+            HarvestPacingScope.FARMER, false, 3, false, 64, 20
     );
+
+    public boolean usesScopedThrottling() {
+        return perHarvestDelayEnabled || batchPauseEnabled;
+    }
 
     public static OptimizationSettings baseline() {
         return BASELINE;
@@ -42,9 +51,12 @@ public record OptimizationSettings(
                 DEFAULT.maxSchedulerSubmissionsPerTick,
                 DEFAULT.maxPendingJobs,
                 DEFAULT.coalesceDuplicates,
-                DEFAULT.perScopePacingEnabled,
-                DEFAULT.pacingScope,
-                DEFAULT.perScopeDelayTicks
+                DEFAULT.harvestScope,
+                DEFAULT.perHarvestDelayEnabled,
+                DEFAULT.perHarvestDelayTicks,
+                DEFAULT.batchPauseEnabled,
+                DEFAULT.harvestsBeforePause,
+                DEFAULT.batchPauseTicks
         );
     }
 }

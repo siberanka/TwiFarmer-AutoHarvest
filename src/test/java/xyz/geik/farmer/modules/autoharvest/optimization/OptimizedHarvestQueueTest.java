@@ -148,7 +148,7 @@ class OptimizedHarvestQueueTest {
     void pacesOneFarmerWithoutBlockingAnotherFarmer() {
         OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
         queue.configure(new OptimizationSettings(true, 1, 1, 8, 10, 64, 256,
-                        true, true, HarvestPacingScope.FARMER, 2),
+                        true, HarvestPacingScope.FARMER, true, 2, false, 64, 20),
                 BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
 
         Plugin plugin = mock(Plugin.class);
@@ -199,6 +199,59 @@ class OptimizedHarvestQueueTest {
     }
 
     @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void pausesOneFarmerAfterItsConfiguredBatchWithoutBlockingAnotherFarmer() {
+        OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
+        queue.configure(new OptimizationSettings(true, 1, 1, 8, 10, 64, 256,
+                        true, HarvestPacingScope.FARMER, false, 2, true, 2, 3),
+                BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
+
+        Plugin plugin = mock(Plugin.class);
+        World world = mock(World.class);
+        RegionScheduler regionScheduler = mock(RegionScheduler.class);
+        GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+        ScheduledTask ticker = mock(ScheduledTask.class);
+        AtomicInteger farmerA = new AtomicInteger();
+        AtomicInteger farmerB = new AtomicInteger();
+        AtomicReference<Consumer<ScheduledTask>> tick = new AtomicReference<>();
+        when(world.getUID()).thenReturn(UUID.randomUUID());
+        when(ticker.getOwningPlugin()).thenReturn(plugin);
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(globalScheduler);
+            bukkit.when(Bukkit::getRegionScheduler).thenReturn(regionScheduler);
+            bukkit.when(Bukkit::getAverageTickTime).thenReturn(10.0);
+            doAnswer(invocation -> {
+                tick.set(invocation.getArgument(1));
+                return ticker;
+            }).when(globalScheduler).runAtFixedRate(eq(plugin), any(), eq(1L), eq(1L));
+            doAnswer(invocation -> {
+                Consumer callback = invocation.getArgument(2);
+                callback.accept(null);
+                return null;
+            }).when(regionScheduler).run(eq(plugin), any(Location.class), any());
+
+            queue.submit(plugin, location(world, 0), "farmer:a", farmerA::incrementAndGet, LOGGER);
+            queue.submit(plugin, location(world, 32), "farmer:a", farmerA::incrementAndGet, LOGGER);
+            queue.submit(plugin, location(world, 64), "farmer:a", farmerA::incrementAndGet, LOGGER);
+            queue.submit(plugin, location(world, 96), "farmer:b", farmerB::incrementAndGet, LOGGER);
+
+            tick.get().accept(ticker);
+            assertEquals(2, farmerA.get());
+            assertEquals(1, farmerB.get());
+
+            tick.get().accept(ticker);
+            tick.get().accept(ticker);
+            assertEquals(2, farmerA.get());
+
+            tick.get().accept(ticker);
+            assertEquals(3, farmerA.get());
+            assertEquals(0, queue.stats().pendingJobs());
+            assertEquals(0, queue.stats().pendingScopes());
+        }
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void reconfigureInvalidatesAnAlreadyScheduledDispatcher() {
         OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
@@ -229,7 +282,7 @@ class OptimizedHarvestQueueTest {
 
     private OptimizationSettings settings(int perRun, int global, int submissions, int pending) {
         return new OptimizationSettings(true, 1, 1, perRun, global, submissions, pending,
-                true, false, HarvestPacingScope.FARMER, 1);
+                true, HarvestPacingScope.FARMER, false, 1, false, 64, 20);
     }
 
     private Location location(World world, int blockX) {

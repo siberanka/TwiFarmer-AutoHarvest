@@ -441,26 +441,45 @@ public final class OptimizedHarvestQueue {
     }
 
     private boolean acquireScopePermit(QueueJob job, OptimizationSettings current, long currentTick) {
-        if (!current.perScopePacingEnabled()) {
+        if (!current.usesScopedThrottling()) {
             return true;
         }
-        AtomicLong nextAllowedTick = job.scope().nextAllowedTick;
-        while (true) {
-            long next = nextAllowedTick.get();
-            if (next > currentTick) {
+        ScopeState scope = job.scope();
+        synchronized (scope) {
+            if (current.perHarvestDelayEnabled() && scope.nextAllowedTick > currentTick) {
                 return false;
             }
-            if (nextAllowedTick.compareAndSet(next, currentTick + current.perScopeDelayTicks())) {
-                return true;
+            if (current.batchPauseEnabled() && scope.pauseUntilTick > currentTick) {
+                return false;
             }
+
+            if (current.perHarvestDelayEnabled()) {
+                scope.nextAllowedTick = currentTick + current.perHarvestDelayTicks();
+            }
+            if (current.batchPauseEnabled()
+                    && ++scope.harvestsSincePause >= current.harvestsBeforePause()) {
+                scope.harvestsSincePause = 0;
+                scope.pauseUntilTick = currentTick + current.batchPauseTicks();
+            }
+            return true;
         }
     }
 
     private long scopeReadyAtTick(QueueJob job, OptimizationSettings current) {
-        if (job == null || !current.perScopePacingEnabled()) {
+        if (job == null || !current.usesScopedThrottling()) {
             return 0L;
         }
-        return job.scope().nextAllowedTick.get();
+        ScopeState scope = job.scope();
+        synchronized (scope) {
+            long readyAt = 0L;
+            if (current.perHarvestDelayEnabled()) {
+                readyAt = scope.nextAllowedTick;
+            }
+            if (current.batchPauseEnabled()) {
+                readyAt = Math.max(readyAt, scope.pauseUntilTick);
+            }
+            return readyAt;
+        }
     }
 
     private void notifyChunkDrained(ChunkKey key) {
@@ -562,7 +581,9 @@ public final class OptimizedHarvestQueue {
     }
 
     private static final class ScopeState {
-        private final AtomicLong nextAllowedTick = new AtomicLong();
+        private long nextAllowedTick;
+        private long pauseUntilTick;
+        private int harvestsSincePause;
         private int pendingJobs;
     }
 }

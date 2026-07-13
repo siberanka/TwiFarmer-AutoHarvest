@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.5.0.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.6.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -52,18 +52,16 @@ When a newer semantic version exists, the localized message includes the `AutoHa
 ```yaml
 optimize-module:
   enable: false
-  queue:
-    initial-delay-ticks: 2
-    continuation-delay-ticks: 1
-    max-jobs-per-run: 8
-    global-max-jobs-per-tick: 32
-    max-scheduler-submissions-per-tick: 8
-    max-pending-jobs: 8192
-    coalesce-duplicates: true
-    per-scope-pacing:
-      enable: true
-      scope: "FARMER"
-      delay-ticks: 2
+  harvest-control:
+    global-max-harvests-per-tick: 32
+    scope: "FARMER"
+    per-harvest-delay:
+      enable: false
+      ticks: 2
+    batch-pause:
+      enable: false
+      harvests-before-pause: 64
+      pause-ticks: 20
   tracking:
     mode: "EVENT_DRIVEN"
     conditions:
@@ -97,14 +95,25 @@ optimize-module:
     check-interval-ticks: 20
     pause-above-region-task-delay-millis: 100
     region-cooldown-ticks: 100
+  queue:
+    initial-delay-ticks: 2
+    continuation-delay-ticks: 1
+    max-jobs-per-run: 8
+    max-scheduler-submissions-per-tick: 8
+    max-pending-jobs: 8192
+    coalesce-duplicates: true
   telemetry:
     enable: true
     log-interval-seconds: 300
 ```
 
-The most important hard limits are global, not per chunk: `global-max-jobs-per-tick` caps harvest actions across every world and Folia region, `max-scheduler-submissions-per-tick` caps region task fan-out, and `max-sections-per-second` caps primary snapshot block reads in 4096-block units. `max-block-checks-per-slice` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests bounded reconciliation; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
+The important controls are intentionally first. `global-max-harvests-per-tick` caps harvest actions across every world and Folia region. `scope` selects the independent timing boundary: `FARMER` is the recommended island boundary, `OWNER` shares timing across a player's Farmers, `REGION` uses the integration region ID, and `CHUNK` isolates each chunk.
 
-`per-scope-pacing` drains large batches steadily instead of producing a short burst followed by a long reconciliation gap. `FARMER` gives every Farmer/island an independent pace and is the recommended default. `OWNER` shares one pace across every Farmer owned by a player, `REGION` isolates integration region IDs, and `CHUNK` isolates individual chunks. `delay-ticks: 2` permits one harvest attempt per scope every two ticks while unrelated scopes continue independently. The fixed baseline used while `optimize-module.enable: false` remains more conservative at one attempt per Farmer every three ticks.
+Both user-facing cooldown systems are disabled by default. `per-harvest-delay` can add a steady delay between individual crops. `batch-pause` instead permits `harvests-before-pause` attempts in one scope, pauses only that scope for `pause-ticks`, and then continues automatically; unrelated Farmers/islands continue normally. Twenty ticks are approximately one second. Disabling both removes artificial Farmer cooldowns while the global queue, scheduler, and adaptive load protections remain active.
+
+Config version 9 migrates the former `queue.global-max-jobs-per-tick` and `queue.per-scope-pacing` values into `harvest-control` after creating a backup. Existing enabled pacing remains enabled with the same scope and delay; new installations default to no artificial pause.
+
+The advanced hard limits remain global and bounded: `max-scheduler-submissions-per-tick` caps region task fan-out, and `max-sections-per-second` caps primary snapshot block reads in 4096-block units. `max-block-checks-per-slice` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests bounded reconciliation; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
 
 Adaptive backpressure uses Paper's rolling MSPT with hysteresis. Above `slowdown-above-mspt`, it gradually scales harvest jobs, region scheduler submissions, reconciliation chunks, snapshot captures, scan starts, section reads, and async slice sizes down toward `minimum-work-percent`. At `pause-above-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Telemetry logs cumulative queue/scan counters only at the configured low frequency and only when useful work, deferral, or failure exists.
 

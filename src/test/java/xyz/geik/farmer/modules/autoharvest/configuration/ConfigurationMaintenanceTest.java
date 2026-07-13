@@ -63,9 +63,12 @@ class ConfigurationMaintenanceTest {
         assertFalse(snapshot.optimization().enabled());
         assertEquals(8, snapshot.optimization().maxJobsPerRun());
         assertEquals(32, snapshot.optimization().globalMaxJobsPerTick());
-        assertTrue(snapshot.optimization().perScopePacingEnabled());
-        assertEquals(HarvestPacingScope.FARMER, snapshot.optimization().pacingScope());
-        assertEquals(2, snapshot.optimization().perScopeDelayTicks());
+        assertEquals(HarvestPacingScope.FARMER, snapshot.optimization().harvestScope());
+        assertFalse(snapshot.optimization().perHarvestDelayEnabled());
+        assertEquals(2, snapshot.optimization().perHarvestDelayTicks());
+        assertFalse(snapshot.optimization().batchPauseEnabled());
+        assertEquals(64, snapshot.optimization().harvestsBeforePause());
+        assertEquals(20, snapshot.optimization().batchPauseTicks());
         assertEquals(1, snapshot.tracking().maxConcurrentScans());
         assertEquals(512, snapshot.tracking().maxCandidatesPerScan());
         assertEquals(32, snapshot.tracking().maxCandidateAdmissionsPerTick());
@@ -161,13 +164,18 @@ class ConfigurationMaintenanceTest {
         assertEquals(2, repaired.getInt("optimize-module.queue.initial-delay-ticks"));
         assertEquals(1, repaired.getInt("optimize-module.queue.continuation-delay-ticks"));
         assertEquals(8, repaired.getInt("optimize-module.queue.max-jobs-per-run"));
-        assertEquals(32, repaired.getInt("optimize-module.queue.global-max-jobs-per-tick"));
+        assertEquals(32, repaired.getInt("optimize-module.harvest-control.global-max-harvests-per-tick"));
         assertEquals(8, repaired.getInt("optimize-module.queue.max-scheduler-submissions-per-tick"));
         assertEquals(8192, repaired.getInt("optimize-module.queue.max-pending-jobs"));
         assertTrue(repaired.getBoolean("optimize-module.queue.coalesce-duplicates"));
-        assertTrue(repaired.getBoolean("optimize-module.queue.per-scope-pacing.enable"));
-        assertEquals("FARMER", repaired.getString("optimize-module.queue.per-scope-pacing.scope"));
-        assertEquals(2, repaired.getInt("optimize-module.queue.per-scope-pacing.delay-ticks"));
+        assertFalse(repaired.getBoolean("optimize-module.harvest-control.per-harvest-delay.enable"));
+        assertEquals("FARMER", repaired.getString("optimize-module.harvest-control.scope"));
+        assertEquals(2, repaired.getInt("optimize-module.harvest-control.per-harvest-delay.ticks"));
+        assertFalse(repaired.getBoolean("optimize-module.harvest-control.batch-pause.enable"));
+        assertEquals(64, repaired.getInt(
+                "optimize-module.harvest-control.batch-pause.harvests-before-pause"));
+        assertEquals(20, repaired.getInt("optimize-module.harvest-control.batch-pause.pause-ticks"));
+        assertFalse(repaired.contains("optimize-module.queue.per-scope-pacing"));
         assertEquals(200, repaired.getInt("optimize-module.tracking.reconcile-interval-ticks"));
         assertEquals(4096, repaired.getInt("optimize-module.tracking.max-pending-scans"));
         assertEquals("EVENT_DRIVEN", repaired.getString("optimize-module.tracking.mode"));
@@ -184,8 +192,41 @@ class ConfigurationMaintenanceTest {
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(8, repaired.getInt("config-version"));
+        assertEquals(9, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
+    }
+
+    @Test
+    void migratesLegacyScopePacingWithoutChangingItsBehavior() throws Exception {
+        File target = temporaryDirectory.resolve("config.yml").toFile();
+        Files.writeString(target.toPath(), """
+                config-version: 8
+                status: true
+                optimize-module:
+                  enable: true
+                  queue:
+                    global-max-jobs-per-tick: 47
+                    per-scope-pacing:
+                      enable: true
+                      scope: "REGION"
+                      delay-ticks: 7
+                custom-extension: preserved
+                """, StandardCharsets.UTF_8);
+
+        ConfigurationMaintenance.ConfigSnapshot snapshot = reconcileConfig(target);
+        YamlConfiguration migrated = YamlConfiguration.loadConfiguration(target);
+
+        assertTrue(snapshot.repaired());
+        assertEquals(1, backupCount());
+        assertEquals(9, migrated.getInt("config-version"));
+        assertEquals(47, snapshot.optimization().globalMaxJobsPerTick());
+        assertTrue(snapshot.optimization().perHarvestDelayEnabled());
+        assertEquals(HarvestPacingScope.REGION, snapshot.optimization().harvestScope());
+        assertEquals(7, snapshot.optimization().perHarvestDelayTicks());
+        assertFalse(snapshot.optimization().batchPauseEnabled());
+        assertFalse(migrated.contains("optimize-module.queue.global-max-jobs-per-tick"));
+        assertFalse(migrated.contains("optimize-module.queue.per-scope-pacing"));
+        assertEquals("preserved", migrated.getString("custom-extension"));
     }
 
     @Test

@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 8
+config-version: 9
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -55,46 +55,52 @@ update-checker:
 # Fixed conservative queue/tracking guards remain active even when this is false.
 # Bukkit world access remains on Paper's owning region thread; no world mutation is async.
 optimize-module:
+  # Enables every configurable optimization value below.
   enable: false
-  queue:
-    # Delay for the first queued harvest after a crop matures.
-    initial-delay-ticks: 2
-    # Delay between later batches from the same chunk queue.
-    continuation-delay-ticks: 1
-    # Maximum validated harvests processed by one chunk/region run.
-    max-jobs-per-run: 8
-    # Hard total harvest budget shared by every world and region each tick.
-    global-max-jobs-per-tick: 32
-    # Hard total number of region batches submitted by the dispatcher each tick.
-    max-scheduler-submissions-per-tick: 8
-    # Global in-memory queue bound. Overflow is deferred to reconciliation.
-    max-pending-jobs: 8192
-    # Merges repeated growth events for the same block while a job is pending.
-    coalesce-duplicates: true
-    # Spreads each Farmer/island queue over time while other Farmers keep progressing.
-    per-scope-pacing:
-      enable: true
-      # OWNER, FARMER, REGION or CHUNK. FARMER is the recommended island boundary.
-      scope: "FARMER"
-      # Minimum time between two harvest attempts belonging to the same scope.
-      delay-ticks: 2
+
+  # Important harvest speed and optional pause settings.
+  harvest-control:
+    # Hard harvest limit shared by every world and Folia region in one server tick.
+    global-max-harvests-per-tick: 32
+    # OWNER, FARMER, REGION or CHUNK. FARMER gives every Farmer/island independent timing.
+    scope: "FARMER"
+    # Optional steady delay between individual harvests in the selected scope.
+    per-harvest-delay:
+      # Disabled by default so harvests do not receive an artificial per-block cooldown.
+      enable: false
+      # Number of ticks between harvests while this delay is enabled (20 ticks ~= 1 second).
+      ticks: 2
+    # Optional batch cooldown: harvest N crops, pause this scope, then continue automatically.
+    batch-pause:
+      # Disabled by default; safety budgets and adaptive backpressure still remain active.
+      enable: false
+      # Number of queued harvest attempts allowed before each pause.
+      harvests-before-pause: 64
+      # Duration of each pause in ticks (20 ticks ~= 1 second).
+      pause-ticks: 20
+
+  # Crop discovery mode and the signals allowed to request bounded scans.
   tracking:
     # EVENT_DRIVEN, PERIODIC_LOADED_CHUNKS or HYBRID.
     mode: "EVENT_DRIVEN"
     conditions:
-      # Event signals used by EVENT_DRIVEN and HYBRID modes.
+      # Tracks crops when their natural growth event reaches maturity.
       growth-events: true
+      # Tracks crops changed by bone meal or another fertilization event.
       fertilize-events: true
+      # Tracks supported crop blocks when a player places them.
       crop-place-events: true
-      # Broad discovery triggers. Keep chunk-load scanning off on large servers.
+      # Scans every loaded chunk signal; keep disabled on very large servers.
       scan-on-chunk-load: false
+      # Scans the loaded Farmer area immediately after a Farmer is purchased.
       scan-on-farmer-purchase: true
+      # Scans nearby loaded chunks when an online player is bootstrapped after enable/reload.
       scan-on-player-join: true
-      # Rechecks nearby chunks as Paper sends them to a player in an enabled Farmer area.
-      # This also resumes farms after walking away and returning without GUI toggles.
+      # Rechecks a chunk when Paper sends it to a player, resuming farms after returning.
       scan-on-player-chunk-load: true
-      # Limits event tracking and player bootstrap to active Farmer areas.
+      # Rejects event/bootstrap tracking outside active Farmer areas unless withoutFarmer is true.
       farmer-regions-only: true
+    # Advanced scan limits below normally do not need changing.
     # EVENT_DRIVEN revisits known crop chunks; periodic modes rotate known loaded chunks.
     reconcile-interval-ticks: 200
     # Chunks added back to the bounded scan queue per reconciliation.
@@ -113,7 +119,7 @@ optimize-module:
     max-block-checks-per-slice: 8192
     # Bound for coalesced chunk scan requests.
     max-pending-scans: 4096
-    # Large bounded batch; its jobs are drained gradually by per-scope pacing.
+    # Maximum mature crop candidates returned by one snapshot scan.
     max-candidates-per-scan: 512
     # Farmer scope lookups and queue admissions performed by one region task/tick.
     max-candidate-admissions-per-tick: 32
@@ -121,19 +127,44 @@ optimize-module:
     purchase-radius-chunks: 8
     # Loaded chunk radius reconciled for online players after enable/reload.
     bootstrap-radius-chunks: 3
+
+  # Automatically reduces or pauses work when server/region tick health degrades.
   adaptive-backpressure:
-    # Gradually scales all global work budgets down before a full safety pause.
+    # Enables load-aware scaling independently from optional harvest batch pauses.
     enable: true
+    # Starts gradually reducing work above this rolling server MSPT.
     slowdown-above-mspt: 35.0
+    # Temporarily stops new work above this rolling server MSPT.
     pause-above-mspt: 45.0
+    # Resumes MSPT-paused work only after the server falls below this value.
     resume-below-mspt: 40.0
     # Lowest budget percentage used between slowdown and pause thresholds.
     minimum-work-percent: 10
+    # Number of ticks between rolling MSPT evaluations.
     check-interval-ticks: 20
-    # Folia/Leaf safeguard: pause when a region callback arrives this late.
+    # Folia/Leaf safeguard threshold for an unusually late region callback.
     pause-above-region-task-delay-millis: 100
+    # Number of ticks that the affected region remains cooled down after a late callback.
     region-cooldown-ticks: 100
+
+  # Advanced bounded-queue limits. Change these only after measuring production load.
+  queue:
+    # Delay before the first queued harvest in a newly active chunk.
+    initial-delay-ticks: 2
+    # Minimum yield between later region runs from the same non-empty chunk queue.
+    continuation-delay-ticks: 1
+    # Maximum validated harvest attempts processed by one chunk/region run.
+    max-jobs-per-run: 8
+    # Maximum region batches submitted by the global dispatcher in one tick.
+    max-scheduler-submissions-per-tick: 8
+    # Global in-memory queue bound; overflow remains live and is reconciled later.
+    max-pending-jobs: 8192
+    # Merges repeated growth signals for a block while its harvest job is pending.
+    coalesce-duplicates: true
+
+  # Low-frequency operational counters for production diagnosis.
   telemetry:
-    # Emits low-frequency counters only while work, deferrals or failures exist.
+    # Emits counters only while useful work, deferrals or failures exist.
     enable: true
+    # Minimum number of seconds between telemetry log lines.
     log-interval-seconds: 300
