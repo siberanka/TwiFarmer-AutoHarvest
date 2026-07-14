@@ -26,6 +26,7 @@ import xyz.geik.farmer.helpers.WorldHelper;
 import xyz.geik.farmer.model.Farmer;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
 import xyz.geik.farmer.modules.autoharvest.compat.FarmerAccess;
+import xyz.geik.farmer.modules.autoharvest.compat.FarmerRegionAccess;
 import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TrackingSettings;
@@ -43,7 +44,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.logging.Level;
 
 /**
  * Event-driven and periodic crop reconciliation with global snapshot, scan and
@@ -682,7 +682,10 @@ public final class CropTrackingService implements Listener {
 
     private boolean hasEnabledFarmer(Location location) {
         try {
-            String regionId = Main.getIntegration().getRegionID(location);
+            String regionId = FarmerRegionAccess.resolveRegionId(location);
+            if (regionId == null) {
+                return false;
+            }
             Farmer farmer = FarmerAccess.findByRegionId(regionId);
             return farmer != null && farmer.getAttributeStatus("autoharvest");
         }
@@ -808,7 +811,7 @@ public final class CropTrackingService implements Listener {
         }
         nextTelemetryNanos = now + current.logIntervalSeconds() * SECOND_NANOS;
         if (pendingScanCount.get() > 0 || droppedScanRequests.sum() > 0) {
-            Main.getInstance().getLogger().info("AutoHarvest tracking: mode=" + settings.mode()
+            module.logDebug("AutoHarvest tracking: mode=" + settings.mode()
                     + ", pending=" + pendingScanCount.get() + ", active=" + activeScans.get()
                     + ", tracked=" + trackedChunks.size() + ", loaded=" + loadedChunks.size()
                     + ", dormant=" + dormantChunks.size() + ", dense=" + denseChunks.size()
@@ -823,7 +826,7 @@ public final class CropTrackingService implements Listener {
         long now = System.nanoTime();
         long next = nextFailureLogNanos.get();
         if (now >= next && nextFailureLogNanos.compareAndSet(next, now + 5_000_000_000L)) {
-            Main.getInstance().getLogger().log(Level.WARNING, "AutoHarvest " + message + '.', exception);
+            module.logError("AutoHarvest " + message + '.', exception);
         }
     }
 

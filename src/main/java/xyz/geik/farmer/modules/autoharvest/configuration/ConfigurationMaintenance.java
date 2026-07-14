@@ -51,7 +51,9 @@ public final class ConfigurationMaintenance {
     private static final String LOAD_PROTECTION = OPTIMIZE_MODULE + ".server-load-protection";
     private static final String ADVANCED = OPTIMIZE_MODULE + ".advanced";
     private static final String HARVEST_QUEUE = ADVANCED + ".harvest-queue";
-    private static final String LOGGING = ADVANCED + ".logging";
+    private static final String LOGGING = "logging";
+    private static final String ERROR_FILE = LOGGING + ".error-file";
+    private static final String V10_LOGGING = ADVANCED + ".logging";
 
     private static final String V9_HARVEST = OPTIMIZE_MODULE + ".harvest-control";
     private static final String V9_HARVEST_DELAY = V9_HARVEST + ".per-harvest-delay";
@@ -95,7 +97,7 @@ public final class ConfigurationMaintenance {
                 readOptimizationSettings(loaded.configuration),
                 readTrackingSettings(loaded.configuration),
                 readBackpressureSettings(loaded.configuration),
-                readTelemetrySettings(loaded.configuration),
+                readLoggingSettings(loaded.configuration),
                 readUpdateSettings(loaded.configuration),
                 changed
         );
@@ -129,8 +131,9 @@ public final class ConfigurationMaintenance {
         boolean changed = false;
         changed |= migrateV8ScopePacing(configuration);
         changed |= migrateV9OptimizationPaths(configuration);
+        changed |= migrateV10Logging(configuration);
         changed |= normalizeFriendlyOptionNames(configuration);
-        changed |= repairInteger(configuration, defaults, "config-version", 10, 10);
+        changed |= repairInteger(configuration, defaults, "config-version", 11, 11);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -163,6 +166,7 @@ public final class ConfigurationMaintenance {
         changed |= ensureSection(configuration, ADVANCED);
         changed |= ensureSection(configuration, HARVEST_QUEUE);
         changed |= ensureSection(configuration, LOGGING);
+        changed |= ensureSection(configuration, ERROR_FILE);
         changed |= repairBoolean(configuration, defaults, OPTIMIZE_MODULE + ".enable");
         changed |= repairInteger(configuration, defaults, HARVEST + ".max-harvests-per-tick", 1, 256);
         changed |= repairString(configuration, defaults, HARVEST + ".separate-speed-for",
@@ -209,8 +213,10 @@ public final class ConfigurationMaintenance {
         changed |= repairInteger(configuration, defaults, HARVEST_QUEUE + ".region-runs-per-tick", 1, 64);
         changed |= repairInteger(configuration, defaults, HARVEST_QUEUE + ".waiting-harvests", 64, 16_384);
         changed |= repairBoolean(configuration, defaults, HARVEST_QUEUE + ".merge-duplicate-blocks");
-        changed |= repairBoolean(configuration, defaults, LOGGING + ".enable");
-        changed |= repairInteger(configuration, defaults, LOGGING + ".interval-seconds", 30, 3_600);
+        changed |= repairBoolean(configuration, defaults, LOGGING + ".debug");
+        changed |= repairInteger(configuration, defaults, LOGGING + ".debug-interval-seconds", 30, 3_600);
+        changed |= repairInteger(configuration, defaults, ERROR_FILE + ".max-size-megabytes", 1, 100);
+        changed |= repairInteger(configuration, defaults, ERROR_FILE + ".history-files", 0, 10);
 
         if (configuration.getDouble(LOAD_PROTECTION + ".resume-below-mspt")
                 >= configuration.getDouble(LOAD_PROTECTION + ".stop-at-mspt")
@@ -230,6 +236,7 @@ public final class ConfigurationMaintenance {
             changed = true;
         }
         changed |= addMissingComments(configuration, defaults, OPTIMIZE_MODULE);
+        changed |= addMissingComments(configuration, defaults, LOGGING);
         return changed;
     }
 
@@ -342,8 +349,8 @@ public final class ConfigurationMaintenance {
         changed |= move(configuration, V9_QUEUE + ".max-pending-jobs", HARVEST_QUEUE + ".waiting-harvests");
         changed |= move(configuration, V9_QUEUE + ".coalesce-duplicates",
                 HARVEST_QUEUE + ".merge-duplicate-blocks");
-        changed |= move(configuration, V9_TELEMETRY + ".enable", LOGGING + ".enable");
-        changed |= move(configuration, V9_TELEMETRY + ".log-interval-seconds", LOGGING + ".interval-seconds");
+        changed |= move(configuration, V9_TELEMETRY + ".enable", V10_LOGGING + ".enable");
+        changed |= move(configuration, V9_TELEMETRY + ".log-interval-seconds", V10_LOGGING + ".interval-seconds");
 
         changed |= removeIfEmpty(configuration, V9_HARVEST_DELAY);
         changed |= removeIfEmpty(configuration, V9_HARVEST_PAUSE);
@@ -353,6 +360,18 @@ public final class ConfigurationMaintenance {
         changed |= removeIfEmpty(configuration, V9_BACKPRESSURE);
         changed |= removeIfEmpty(configuration, V9_QUEUE);
         changed |= removeIfEmpty(configuration, V9_TELEMETRY);
+        return changed;
+    }
+
+    private static boolean migrateV10Logging(YamlConfiguration configuration) {
+        boolean changed = false;
+        changed |= move(configuration, V10_LOGGING + ".interval-seconds",
+                LOGGING + ".debug-interval-seconds");
+        if (configuration.contains(V10_LOGGING + ".enable")) {
+            configuration.set(V10_LOGGING + ".enable", null);
+            changed = true;
+        }
+        changed |= removeIfEmpty(configuration, V10_LOGGING);
         return changed;
     }
 
@@ -639,10 +658,12 @@ public final class ConfigurationMaintenance {
         );
     }
 
-    private static TelemetrySettings readTelemetrySettings(YamlConfiguration configuration) {
-        return new TelemetrySettings(
-                configuration.getBoolean(LOGGING + ".enable"),
-                configuration.getInt(LOGGING + ".interval-seconds")
+    private static LoggingSettings readLoggingSettings(YamlConfiguration configuration) {
+        return new LoggingSettings(
+                configuration.getBoolean(LOGGING + ".debug"),
+                configuration.getInt(LOGGING + ".debug-interval-seconds"),
+                configuration.getInt(ERROR_FILE + ".max-size-megabytes"),
+                configuration.getInt(ERROR_FILE + ".history-files")
         );
     }
 
@@ -811,7 +832,7 @@ public final class ConfigurationMaintenance {
             @NotNull OptimizationSettings optimization,
             @NotNull TrackingSettings tracking,
             @NotNull BackpressureSettings backpressure,
-            @NotNull TelemetrySettings telemetry,
+            @NotNull LoggingSettings logging,
             @NotNull UpdateSettings update,
             boolean repaired
     ) {

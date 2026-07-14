@@ -82,6 +82,10 @@ class ConfigurationMaintenanceTest {
         assertEquals(32, snapshot.stackedCrops().maxSegmentsPerHarvest());
         assertTrue(snapshot.update().enabled());
         assertEquals(6, snapshot.update().checkIntervalHours());
+        assertFalse(snapshot.logging().debugEnabled());
+        assertEquals(300, snapshot.logging().debugIntervalSeconds());
+        assertEquals(5, snapshot.logging().errorMaxSizeMegabytes());
+        assertEquals(2, snapshot.logging().errorHistoryFiles());
         assertEquals(List.of("WHEAT", "CARROT", "POTATO", "PUMPKIN"), snapshot.config().getItems());
     }
 
@@ -190,7 +194,7 @@ class ConfigurationMaintenanceTest {
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(10, repaired.getInt("config-version"));
+        assertEquals(11, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 
@@ -216,7 +220,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(10, migrated.getInt("config-version"));
+        assertEquals(11, migrated.getInt("config-version"));
         assertEquals(47, snapshot.optimization().globalMaxJobsPerTick());
         assertTrue(snapshot.optimization().perHarvestDelayEnabled());
         assertEquals(HarvestPacingScope.REGION, snapshot.optimization().harvestScope());
@@ -298,7 +302,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(10, migrated.getInt("config-version"));
+        assertEquals(11, migrated.getInt("config-version"));
         assertEquals(3, snapshot.optimization().initialDelayTicks());
         assertEquals(2, snapshot.optimization().continuationDelayTicks());
         assertEquals(9, snapshot.optimization().maxJobsPerRun());
@@ -342,8 +346,10 @@ class ConfigurationMaintenanceTest {
         assertEquals(30, snapshot.backpressure().checkIntervalTicks());
         assertEquals(120, snapshot.backpressure().pauseAboveRegionTaskDelayMillis());
         assertEquals(140, snapshot.backpressure().regionCooldownTicks());
-        assertFalse(snapshot.telemetry().enabled());
-        assertEquals(600, snapshot.telemetry().logIntervalSeconds());
+        assertFalse(snapshot.logging().debugEnabled());
+        assertEquals(600, snapshot.logging().debugIntervalSeconds());
+        assertEquals(5, snapshot.logging().errorMaxSizeMegabytes());
+        assertEquals(2, snapshot.logging().errorHistoryFiles());
         assertEquals("PLAYER", migrated.getString("optimize-module.harvest.separate-speed-for"));
         assertEquals("BOTH", migrated.getString("optimize-module.crop-search.mode"));
         assertEquals(9, migrated.getInt("optimize-module.crop-search.scan-radius.new-farmer-radius-chunks"));
@@ -355,10 +361,40 @@ class ConfigurationMaintenanceTest {
         assertFalse(migrated.contains("optimize-module.adaptive-backpressure"));
         assertFalse(migrated.contains("optimize-module.queue"));
         assertFalse(migrated.contains("optimize-module.telemetry"));
+        assertFalse(migrated.contains("optimize-module.advanced.logging"));
+        assertFalse(migrated.getBoolean("logging.debug"));
+        assertEquals(600, migrated.getInt("logging.debug-interval-seconds"));
 
         ConfigurationMaintenance.ConfigSnapshot secondPass = reconcileConfig(target);
         assertFalse(secondPass.repaired());
         assertEquals(1, backupCount());
+    }
+
+    @Test
+    void migratesV10TelemetryWithoutEnablingConsoleDebug() throws Exception {
+        File target = temporaryDirectory.resolve("config.yml").toFile();
+        Files.writeString(target.toPath(), """
+                config-version: 10
+                status: true
+                optimize-module:
+                  enable: true
+                  advanced:
+                    logging:
+                      enable: true
+                      interval-seconds: 450
+                custom-extension: preserved
+                """, StandardCharsets.UTF_8);
+
+        ConfigurationMaintenance.ConfigSnapshot snapshot = reconcileConfig(target);
+        YamlConfiguration migrated = YamlConfiguration.loadConfiguration(target);
+
+        assertTrue(snapshot.repaired());
+        assertEquals(1, backupCount());
+        assertEquals(11, migrated.getInt("config-version"));
+        assertFalse(snapshot.logging().debugEnabled());
+        assertEquals(450, snapshot.logging().debugIntervalSeconds());
+        assertFalse(migrated.contains("optimize-module.advanced.logging"));
+        assertEquals("preserved", migrated.getString("custom-extension"));
     }
 
     @Test

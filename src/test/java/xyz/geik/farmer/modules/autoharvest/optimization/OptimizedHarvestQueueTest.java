@@ -13,6 +13,7 @@ import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.HarvestPacingScope;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
+import xyz.geik.farmer.modules.autoharvest.logging.ModuleDiagnostics;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -93,7 +94,9 @@ class OptimizedHarvestQueueTest {
     @Test
     void overflowDefersWithoutSubmittingARegionTask() {
         OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
-        queue.configure(settings(4, 8, 4, 64), BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
+        ModuleDiagnostics diagnostics = mock(ModuleDiagnostics.class);
+        queue.configure(settings(4, 8, 4, 64), BackpressureSettings.DEFAULT,
+                TelemetrySettings.DISABLED, diagnostics);
         Plugin plugin = mock(Plugin.class);
         World world = mock(World.class);
         RegionScheduler regionScheduler = mock(RegionScheduler.class);
@@ -107,12 +110,13 @@ class OptimizedHarvestQueueTest {
             bukkit.when(Bukkit::getRegionScheduler).thenReturn(regionScheduler);
             for (int index = 0; index < 64; index++) {
                 assertEquals(OptimizedHarvestQueue.SubmitResult.ENQUEUED,
-                        queue.submit(plugin, location(world, index * 16), () -> { }, LOGGER));
+                        queue.submit(plugin, location(world, index * 16), () -> { }));
             }
 
             assertEquals(OptimizedHarvestQueue.SubmitResult.DEFERRED,
-                    queue.submit(plugin, location(world, 4096), () -> { }, LOGGER));
+                    queue.submit(plugin, location(world, 4096), () -> { }));
             verify(regionScheduler, never()).run(any(), any(Location.class), any());
+            verify(diagnostics).debug("AutoHarvest harvest queue is full; crops are deferred to bounded reconciliation.");
             assertEquals(1, queue.stats().deferredJobs());
         }
     }

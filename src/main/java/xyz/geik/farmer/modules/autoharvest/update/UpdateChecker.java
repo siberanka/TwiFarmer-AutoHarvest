@@ -31,7 +31,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.logging.Level;
 
 /**
  * Checks the fixed project repository without blocking a server thread and
@@ -80,7 +79,7 @@ public final class UpdateChecker implements Listener {
             return;
         }
         if (currentVersion == null || ReleaseVersion.parse(currentVersion).isEmpty()) {
-            plugin.getLogger().warning("Farmer AutoHarvest update check is disabled: current version is unavailable.");
+            module.logError("Farmer AutoHarvest update check is disabled: current version is unavailable.", null);
             return;
         }
 
@@ -311,10 +310,10 @@ public final class UpdateChecker implements Listener {
             return;
         }
         if (exception == null) {
-            plugin.getLogger().warning("Farmer AutoHarvest " + message + '.');
+            module.logError("Farmer AutoHarvest " + message + '.', null);
         }
         else {
-            plugin.getLogger().log(Level.WARNING, "Farmer AutoHarvest " + message + '.', exception);
+            module.logError("Farmer AutoHarvest " + message + '.', exception);
         }
     }
 

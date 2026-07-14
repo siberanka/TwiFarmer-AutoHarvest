@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.7.0.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.7.1.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -23,6 +23,8 @@ The module refuses to enable when Paper's region scheduler API is unavailable.
 Crop block discovery uses an explicit modern-material table. Legacy Bukkit constants are never passed to XMaterial during startup, allowing the module and its management-panel icon to load reliably on current Paper, Folia, and Leaf builds.
 
 Farmer cache access is linked through a one-time MethodHandle adapter. This preserves compatibility with both the `HashMap` return descriptor used by Farmer v6-b113 and the `Map` descriptor used by v6-b117 and newer without reflection in the per-block lookup path.
+
+Farmer v6-b117's SuperiorSkyblock integration can throw when a scanned location is outside every island. AutoHarvest recognizes only that integration's known null-island stack signature as a normal negative lookup. Crops outside a Farmer area are denied without console spam, while unrelated integration faults remain visible in the bounded error log.
 
 ## Automatic File Maintenance
 
@@ -36,6 +38,21 @@ Before changing an existing file, the original is copied to a local backup direc
 | `lang/*.yml` | `plugins/Farmer/modules/autoharvest/lang/backups/` |
 
 Unknown entries are preserved so later module versions and server-specific additions are not discarded.
+
+## Logging
+
+Routine queue saturation messages and periodic tracking/queue counters are hidden by default. Set `logging.debug: true` to show them in the console; `debug-interval-seconds` controls the minimum statistics interval and works independently from `optimize-module.enable`.
+
+Unexpected AutoHarvest exceptions are written asynchronously to `plugins/Farmer/modules/autoharvest/error.log`. The writer uses a fixed 256-entry memory queue, limits each stack-trace entry, and never performs file I/O on a Folia region thread. `max-size-megabytes` limits each file and `history-files` limits retained rotations (`error.log.1`, `error.log.2`, and so on), bounding both memory and disk use.
+
+```yaml
+logging:
+  debug: false
+  debug-interval-seconds: 300
+  error-file:
+    max-size-megabytes: 5
+    history-files: 2
+```
 
 ## Update Checker
 
@@ -106,20 +123,17 @@ optimize-module:
       region-runs-per-tick: 8
       waiting-harvests: 8192
       merge-duplicate-blocks: true
-    logging:
-      enable: true
-      interval-seconds: 300
 ```
 
 The important controls are intentionally first. `max-harvests-per-tick` caps harvest actions across every world and Folia region. `separate-speed-for` selects the independent timing boundary: `FARMER` is the recommended island boundary, `PLAYER` shares timing across a player's Farmers, `LAND` uses the integration land/region ID, and `CHUNK` isolates each chunk.
 
 Both user-facing cooldown systems are disabled by default. `delay-between-harvests` can add a steady delay between individual crops. `pause-after-batch` instead permits `after-harvests` attempts in one scope, pauses only that scope for `ticks`, and then continues automatically; unrelated Farmers/islands continue normally. Twenty ticks are approximately one second. Disabling both removes artificial Farmer cooldowns while the global queue, scheduler, and server load protections remain active.
 
-Config version 10 renames and groups every optimization setting. Existing version 8 and 9 files are backed up and migrated automatically; valid values, enabled modes, custom unknown entries, and runtime behavior are preserved. Old `OWNER`, `REGION`, `EVENT_DRIVEN`, `PERIODIC_LOADED_CHUNKS`, and `HYBRID` values become the clearer `PLAYER`, `LAND`, `EVENTS`, `TIMER`, and `BOTH` names.
+Config version 11 adds independent debug and bounded error-file settings. Existing version 8, 9, and 10 files are backed up and migrated automatically; valid optimization values, enabled modes, custom unknown entries, and runtime behavior are preserved. Version 10's default telemetry switch is retired so upgraded servers remain quiet until `logging.debug` is explicitly enabled. Old `OWNER`, `REGION`, `EVENT_DRIVEN`, `PERIODIC_LOADED_CHUNKS`, and `HYBRID` values become the clearer `PLAYER`, `LAND`, `EVENTS`, `TIMER`, and `BOTH` names.
 
 The advanced hard limits remain global and bounded: `region-runs-per-tick` caps region task fan-out, and `sections-per-second` caps primary snapshot block reads in 4096-block units. `blocks-per-async-task` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests another bounded search; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
 
-Server load protection uses Paper's rolling MSPT with hysteresis. Above `slow-down-at-mspt`, it gradually scales harvest jobs, region scheduler submissions, repeat searches, snapshot captures, scan starts, section reads, and async task sizes down toward `minimum-speed-percent`. At `stop-at-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Advanced logging emits cumulative counters only at the configured low frequency and only when useful work, deferral, or failure exists.
+Server load protection uses Paper's rolling MSPT with hysteresis. Above `slow-down-at-mspt`, it gradually scales harvest jobs, region scheduler submissions, repeat searches, snapshot captures, scan starts, section reads, and async task sizes down toward `minimum-speed-percent`. At `stop-at-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Debug logging emits cumulative counters only at the configured low frequency and only when useful work, deferral, or failure exists.
 
 The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, Farmer scope admission, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Discovered crop queueing is sliced by `crops-queued-per-tick`, empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or a repeat search is due.
 

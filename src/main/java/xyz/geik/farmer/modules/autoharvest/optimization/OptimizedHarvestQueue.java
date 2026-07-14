@@ -9,6 +9,7 @@ import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
+import xyz.geik.farmer.modules.autoharvest.logging.ModuleDiagnostics;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -19,7 +20,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -52,27 +52,37 @@ public final class OptimizedHarvestQueue {
     private volatile OptimizationSettings settings = OptimizationSettings.stopped();
     private volatile TelemetrySettings telemetry = TelemetrySettings.DISABLED;
     private volatile ScheduledTask ticker;
-    private volatile Logger logger;
+    private volatile ModuleDiagnostics diagnostics = ModuleDiagnostics.NOOP;
     private volatile ChunkDrainListener chunkDrainListener;
 
     public void configure(
             @NotNull OptimizationSettings nextSettings,
             @NotNull BackpressureSettings backpressureSettings,
-            @NotNull TelemetrySettings telemetrySettings
+            @NotNull TelemetrySettings telemetrySettings,
+            @NotNull ModuleDiagnostics moduleDiagnostics
     ) {
         settings = OptimizationSettings.stopped();
         revision.incrementAndGet();
         clear();
         backpressure.configure(backpressureSettings);
         telemetry = telemetrySettings;
+        diagnostics = moduleDiagnostics;
         settings = nextSettings;
+    }
+
+    /** Retained for module-side source compatibility. */
+    public void configure(
+            @NotNull OptimizationSettings nextSettings,
+            @NotNull BackpressureSettings backpressureSettings,
+            @NotNull TelemetrySettings telemetrySettings
+    ) {
+        configure(nextSettings, backpressureSettings, telemetrySettings, ModuleDiagnostics.NOOP);
     }
 
     public @NotNull SubmitResult submit(
             @NotNull Plugin plugin,
             @NotNull Location location,
-            @NotNull Runnable action,
-            @NotNull Logger operationLogger
+            @NotNull Runnable action
     ) {
         if (!settings.enabled()) {
             return SubmitResult.STOPPED;
@@ -84,22 +94,29 @@ public final class OptimizedHarvestQueue {
         }
         String chunkScope = "chunk:" + world.getUID() + ':'
                 + (location.getBlockX() >> 4) + ':' + (location.getBlockZ() >> 4);
-        return submit(plugin, location, chunkScope, action, operationLogger);
+        return submit(plugin, location, chunkScope, action);
+    }
+
+    /** Retained for module-side source compatibility. */
+    public @NotNull SubmitResult submit(
+            @NotNull Plugin plugin,
+            @NotNull Location location,
+            @NotNull Runnable action,
+            @SuppressWarnings("unused") @NotNull Logger operationLogger
+    ) {
+        return submit(plugin, location, action);
     }
 
     public @NotNull SubmitResult submit(
             @NotNull Plugin plugin,
             @NotNull Location location,
             @NotNull String scopeKey,
-            @NotNull Runnable action,
-            @NotNull Logger operationLogger
+            @NotNull Runnable action
     ) {
         OptimizationSettings current = settings;
         if (!current.enabled()) {
             return SubmitResult.STOPPED;
         }
-        logger = operationLogger;
-
         World world = location.getWorld();
         if (world == null) {
             deferredJobs.increment();
@@ -115,7 +132,7 @@ public final class OptimizedHarvestQueue {
         if (!reserveSlot(current.maxPendingJobs())) {
             pendingBlocks.remove(blockKey);
             deferredJobs.increment();
-            logOverflow(operationLogger);
+            logOverflow();
             return SubmitResult.DEFERRED;
         }
 
@@ -142,7 +159,7 @@ public final class OptimizedHarvestQueue {
         if (ready) {
             readyQueues.offer(new ReadyQueue(chunkKey, queue, readyAtTick(current.initialDelayTicks())));
         }
-        if (!ensureTicker(plugin, operationLogger)) {
+        if (!ensureTicker(plugin)) {
             removeJob(chunkKey, queue, job);
             ChunkQueue failedQueue = queue;
             readyQueues.removeIf(entry -> entry.queue() == failedQueue);
@@ -150,6 +167,17 @@ public final class OptimizedHarvestQueue {
             return SubmitResult.DEFERRED;
         }
         return SubmitResult.ENQUEUED;
+    }
+
+    /** Retained for module-side source compatibility. */
+    public @NotNull SubmitResult submit(
+            @NotNull Plugin plugin,
+            @NotNull Location location,
+            @NotNull String scopeKey,
+            @NotNull Runnable action,
+            @SuppressWarnings("unused") @NotNull Logger operationLogger
+    ) {
+        return submit(plugin, location, scopeKey, action);
     }
 
     public void setChunkDrainListener(ChunkDrainListener listener) {
@@ -185,7 +213,7 @@ public final class OptimizedHarvestQueue {
                 coalescedJobs.sum(), schedulerFailures.sum(), pausedTicks.sum());
     }
 
-    private boolean ensureTicker(Plugin plugin, Logger operationLogger) {
+    private boolean ensureTicker(Plugin plugin) {
         if (ticker != null) {
             return true;
         }
@@ -201,7 +229,7 @@ public final class OptimizedHarvestQueue {
             }
             catch (RuntimeException exception) {
                 schedulerFailures.increment();
-                operationLogger.log(Level.WARNING, "AutoHarvest could not start its bounded harvest dispatcher.", exception);
+                diagnostics.error("AutoHarvest could not start its bounded harvest dispatcher.", exception);
                 return false;
             }
         }
@@ -272,10 +300,7 @@ public final class OptimizedHarvestQueue {
         }
         catch (RuntimeException exception) {
             schedulerFailures.increment();
-            Logger currentLogger = logger;
-            if (currentLogger != null) {
-                currentLogger.log(Level.WARNING, "AutoHarvest could not schedule a bounded region batch.", exception);
-            }
+            diagnostics.error("AutoHarvest could not schedule a bounded region batch.", exception);
             return false;
         }
     }
@@ -315,10 +340,7 @@ public final class OptimizedHarvestQueue {
                 job.action.run();
             }
             catch (RuntimeException exception) {
-                Logger currentLogger = logger;
-                if (currentLogger != null) {
-                    currentLogger.log(Level.WARNING, "AutoHarvest rejected a queued crop operation.", exception);
-                }
+                diagnostics.error("AutoHarvest rejected a queued crop operation.", exception);
             }
             finally {
                 processed++;
@@ -346,10 +368,7 @@ public final class OptimizedHarvestQueue {
             long readyAt = Math.max(readyAtTick(current.continuationDelayTicks()),
                     scopeReadyAtTick(nextJob, current));
             readyQueues.offer(new ReadyQueue(key, queue, readyAt));
-            Logger currentLogger = logger;
-            if (currentLogger != null) {
-                ensureTicker(plugin, currentLogger);
-            }
+            ensureTicker(plugin);
         }
         else {
             notifyChunkDrained(key);
@@ -376,11 +395,8 @@ public final class OptimizedHarvestQueue {
             }
         }
         if (!readyQueues.isEmpty()) {
-            Logger currentLogger = logger;
             Plugin plugin = task.getOwningPlugin();
-            if (currentLogger != null) {
-                ensureTicker(plugin, currentLogger);
-            }
+            ensureTicker(plugin);
         }
     }
 
@@ -491,10 +507,7 @@ public final class OptimizedHarvestQueue {
             listener.onChunkDrained(key.worldId(), key.chunkX(), key.chunkZ());
         }
         catch (RuntimeException exception) {
-            Logger currentLogger = logger;
-            if (currentLogger != null) {
-                currentLogger.log(Level.WARNING, "AutoHarvest rejected a chunk-drain callback.", exception);
-            }
+            diagnostics.error("AutoHarvest rejected a chunk-drain callback.", exception);
         }
     }
 
@@ -502,18 +515,17 @@ public final class OptimizedHarvestQueue {
         return dispatcherTicks.get() + delayTicks;
     }
 
-    private void logOverflow(Logger operationLogger) {
+    private void logOverflow() {
         long now = System.nanoTime();
         long next = nextOverflowLogNanos.get();
         if (now >= next && nextOverflowLogNanos.compareAndSet(next, now + OVERFLOW_LOG_INTERVAL_NANOS)) {
-            operationLogger.warning("AutoHarvest harvest queue is full; crops are deferred to bounded reconciliation.");
+            diagnostics.debug("AutoHarvest harvest queue is full; crops are deferred to bounded reconciliation.");
         }
     }
 
     private void logTelemetry() {
         TelemetrySettings current = telemetry;
-        Logger currentLogger = logger;
-        if (!current.enabled() || currentLogger == null) {
+        if (!current.enabled()) {
             return;
         }
         long now = System.nanoTime();
@@ -522,7 +534,7 @@ public final class OptimizedHarvestQueue {
         if (now >= next && nextTelemetryNanos.compareAndSet(next, now + interval)) {
             QueueStats stats = stats();
             if (stats.pendingJobs() > 0 || stats.deferredJobs() > 0 || stats.schedulerFailures() > 0) {
-                currentLogger.info("AutoHarvest queue: pending=" + stats.pendingJobs()
+                diagnostics.debug("AutoHarvest queue: pending=" + stats.pendingJobs()
                         + ", chunks=" + stats.pendingChunks() + ", scopes=" + stats.pendingScopes()
                         + ", processed=" + stats.processedJobs()
                         + ", deferred=" + stats.deferredJobs() + ", coalesced=" + stats.coalescedJobs()

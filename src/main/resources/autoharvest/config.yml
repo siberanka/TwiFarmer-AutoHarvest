@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 10
+config-version: 11
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -50,6 +50,18 @@ update-checker:
   check-interval-hours: 6
   connect-timeout-seconds: 5
   request-timeout-seconds: 8
+
+# Controls optional console diagnostics and the bounded module error file.
+logging:
+  # Shows queue saturation and periodic tracking/queue statistics in the console.
+  debug: false
+  # Minimum seconds between periodic debug statistics.
+  debug-interval-seconds: 300
+  error-file:
+    # Maximum size of each error.log file before rotation.
+    max-size-megabytes: 5
+    # Number of rotated error.log files retained in addition to the active file.
+    history-files: 2
 
 # Optional production tuning. Configured child values are ignored while enable is false.
 # Fixed conservative safety limits remain active even when this is false.
@@ -165,8 +177,3 @@ optimize-module:
       waiting-harvests: 8192
       # Merges repeated growth signals for a block while its harvest job is pending.
       merge-duplicate-blocks: true
-    logging:
-      # Emits low-frequency counters only while useful work or failures exist.
-      enable: true
-      # Minimum number of seconds between diagnostic log lines.
-      interval-seconds: 300

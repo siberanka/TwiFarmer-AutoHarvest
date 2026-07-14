@@ -11,6 +11,7 @@ import xyz.geik.farmer.modules.FarmerModule;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigFile;
 import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.ConfigurationMaintenance;
+import xyz.geik.farmer.modules.autoharvest.configuration.LoggingSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.StackedCropSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
@@ -19,6 +20,8 @@ import xyz.geik.farmer.modules.autoharvest.configuration.UpdateSettings;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.AutoHarvestGuiCreateEvent;
 import xyz.geik.farmer.modules.autoharvest.handlers.CropHarvesting;
+import xyz.geik.farmer.modules.autoharvest.logging.BoundedErrorLogger;
+import xyz.geik.farmer.modules.autoharvest.logging.ModuleDiagnostics;
 import xyz.geik.farmer.modules.autoharvest.optimization.OptimizedHarvestQueue;
 import xyz.geik.farmer.modules.autoharvest.platform.PaperPlatform;
 import xyz.geik.farmer.modules.autoharvest.tracking.CropTrackingService;
@@ -38,7 +41,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
 
 /**
  * AutoHarvest module main class.
@@ -78,9 +80,12 @@ public class AutoHarvest extends FarmerModule {
     private volatile TrackingSettings activeTrackingSettings = TrackingSettings.baseline();
     private volatile BackpressureSettings configuredBackpressure = BackpressureSettings.DEFAULT;
     private volatile BackpressureSettings activeBackpressure = BackpressureSettings.BASELINE;
-    private volatile TelemetrySettings configuredTelemetry = TelemetrySettings.DEFAULT;
+    private volatile LoggingSettings loggingSettings = LoggingSettings.DEFAULT;
     private volatile TelemetrySettings activeTelemetry = TelemetrySettings.DISABLED;
     private volatile UpdateSettings updateSettings = UpdateSettings.DEFAULT;
+    private volatile ModuleDiagnostics diagnostics = ModuleDiagnostics.NOOP;
+
+    private BoundedErrorLogger boundedErrorLogger;
 
     private ConfigFile configFile;
 
@@ -97,6 +102,8 @@ public class AutoHarvest extends FarmerModule {
                             + " requires Paper, Folia or Leaf. Bukkit/Spigot is unsupported.");
             return;
         }
+
+        startDiagnostics();
 
         if (!loadConfigurationFiles()) {
             setEnabled(false);
@@ -131,7 +138,7 @@ public class AutoHarvest extends FarmerModule {
         stopUpdateChecker();
         unregisterListeners();
         optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
-                BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
+                BackpressureSettings.BASELINE, TelemetrySettings.DISABLED, diagnostics);
 
         if (!loadConfigurationFiles()) {
             return;
@@ -155,7 +162,7 @@ public class AutoHarvest extends FarmerModule {
         lifecycleGeneration.incrementAndGet();
         stopUpdateChecker();
         optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
-                BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
+                BackpressureSettings.BASELINE, TelemetrySettings.DISABLED, diagnostics);
         unregisterListeners();
         crops = Collections.emptySet();
         stackedCrops = Collections.emptySet();
@@ -168,9 +175,10 @@ public class AutoHarvest extends FarmerModule {
         activeTrackingSettings = TrackingSettings.baseline();
         configuredBackpressure = BackpressureSettings.DEFAULT;
         activeBackpressure = BackpressureSettings.BASELINE;
-        configuredTelemetry = TelemetrySettings.DEFAULT;
+        loggingSettings = LoggingSettings.DEFAULT;
         activeTelemetry = TelemetrySettings.DISABLED;
         updateSettings = UpdateSettings.DEFAULT;
+        stopDiagnostics();
         if (instance == this) {
             instance = null;
         }
@@ -189,15 +197,14 @@ public class AutoHarvest extends FarmerModule {
         catch (RuntimeException | LinkageError exception) {
             active = false;
             optimizedHarvestQueue.configure(OptimizationSettings.stopped(),
-                    BackpressureSettings.BASELINE, TelemetrySettings.DISABLED);
+                    BackpressureSettings.BASELINE, TelemetrySettings.DISABLED, diagnostics);
             try {
                 unregisterListeners();
             }
             catch (RuntimeException | LinkageError cleanupFailure) {
                 exception.addSuppressed(cleanupFailure);
             }
-            Main.getInstance().getLogger().log(Level.SEVERE,
-                    "AutoHarvest could not activate its runtime; the module was disabled.", exception);
+            logCritical("AutoHarvest could not activate its runtime; the module was disabled.", exception);
             return false;
         }
     }
@@ -255,14 +262,16 @@ public class AutoHarvest extends FarmerModule {
                 optimizationSettings = snapshot.optimization();
                 configuredTrackingSettings = snapshot.tracking();
                 configuredBackpressure = snapshot.backpressure();
-                configuredTelemetry = snapshot.telemetry();
+                loggingSettings = snapshot.logging();
+                if (boundedErrorLogger != null) {
+                    boundedErrorLogger.configure(loggingSettings);
+                }
                 updateSettings = snapshot.update();
             }
             return true;
         }
         catch (IOException | RuntimeException exception) {
-            Main.getInstance().getLogger().log(Level.SEVERE,
-                    "AutoHarvest could not safely load its configuration; the module was not enabled.", exception);
+            logCritical("AutoHarvest could not safely load its configuration; the module was not enabled.", exception);
             return false;
         }
     }
@@ -318,8 +327,7 @@ public class AutoHarvest extends FarmerModule {
                     exception.addSuppressed(cleanupFailure);
                 }
             }
-            Main.getInstance().getLogger().log(Level.WARNING,
-                    "AutoHarvest update checks could not start; harvesting remains enabled.", exception);
+            logError("AutoHarvest update checks could not start; harvesting remains enabled.", exception);
         }
     }
 
@@ -331,8 +339,7 @@ public class AutoHarvest extends FarmerModule {
                 checker.stop();
             }
             catch (RuntimeException | LinkageError exception) {
-                Main.getInstance().getLogger().log(Level.WARNING,
-                        "AutoHarvest update checks could not stop cleanly.", exception);
+                logError("AutoHarvest update checks could not stop cleanly.", exception);
             }
         }
     }
@@ -358,8 +365,8 @@ public class AutoHarvest extends FarmerModule {
                 ? optimizationSettings : OptimizationSettings.baseline();
         activeTrackingSettings = configuredOptimization ? configuredTrackingSettings : TrackingSettings.baseline();
         activeBackpressure = configuredOptimization ? configuredBackpressure : BackpressureSettings.BASELINE;
-        activeTelemetry = configuredOptimization ? configuredTelemetry : TelemetrySettings.DISABLED;
-        optimizedHarvestQueue.configure(activeOptimizationSettings, activeBackpressure, activeTelemetry);
+        activeTelemetry = loggingSettings.telemetry();
+        optimizedHarvestQueue.configure(activeOptimizationSettings, activeBackpressure, activeTelemetry, diagnostics);
     }
 
     private Set<XMaterial> parseCrops(List<String> configuredCrops) {
@@ -395,7 +402,7 @@ public class AutoHarvest extends FarmerModule {
             @NotNull Runnable action
     ) {
         OptimizedHarvestQueue.SubmitResult result = optimizedHarvestQueue.submit(
-                Main.getInstance(), location, scopeKey, action, Main.getInstance().getLogger());
+                Main.getInstance(), location, scopeKey, action);
         if (result == OptimizedHarvestQueue.SubmitResult.ENQUEUED
                 || result == OptimizedHarvestQueue.SubmitResult.COALESCED) {
             return;
@@ -488,5 +495,34 @@ public class AutoHarvest extends FarmerModule {
 
     public boolean isActiveGeneration(long generation) {
         return active && lifecycleGeneration.get() == generation;
+    }
+
+    public void logDebug(@NotNull String message) {
+        diagnostics.debug(message);
+    }
+
+    public void logError(@NotNull String message, Throwable exception) {
+        diagnostics.error(message, exception);
+    }
+
+    private void logCritical(String message, Throwable exception) {
+        logError(message, exception);
+        Main.getInstance().getLogger().severe(message + " Details were written to modules/autoharvest/error.log.");
+    }
+
+    private void startDiagnostics() {
+        stopDiagnostics();
+        boundedErrorLogger = new BoundedErrorLogger(
+                getModuleDirectory().toPath(), Main.getInstance().getLogger(), LoggingSettings.DEFAULT);
+        diagnostics = boundedErrorLogger;
+    }
+
+    private void stopDiagnostics() {
+        diagnostics = ModuleDiagnostics.NOOP;
+        BoundedErrorLogger logger = boundedErrorLogger;
+        boundedErrorLogger = null;
+        if (logger != null) {
+            logger.close();
+        }
     }
 }

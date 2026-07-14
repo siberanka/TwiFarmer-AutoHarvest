@@ -12,21 +12,19 @@ import org.bukkit.event.block.BlockFertilizeEvent;
 import org.bukkit.event.block.BlockGrowEvent;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
-import xyz.geik.farmer.Main;
 import xyz.geik.farmer.helpers.WorldHelper;
 import xyz.geik.farmer.model.Farmer;
 import xyz.geik.farmer.model.inventory.FarmerInv;
 import xyz.geik.farmer.model.inventory.FarmerItem;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
 import xyz.geik.farmer.modules.autoharvest.compat.FarmerAccess;
+import xyz.geik.farmer.modules.autoharvest.compat.FarmerRegionAccess;
 import xyz.geik.farmer.modules.autoharvest.configuration.HarvestPacingScope;
 import xyz.geik.farmer.modules.autoharvest.configuration.OptimizationSettings;
 import xyz.geik.glib.shades.xseries.XMaterial;
 
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Level;
 
 /**
  * Detects mature crops and performs an idempotent harvest on the owning region.
@@ -36,9 +34,6 @@ import java.util.logging.Level;
  * @since 1.0.0
  */
 public class AutoHarvestEvent implements Listener {
-
-    private final AtomicBoolean lookupFailureLogged = new AtomicBoolean();
-    private final AtomicBoolean harvestFailureLogged = new AtomicBoolean();
 
     /**
      * Defers harvesting by one region tick. At MONITOR priority the event's final
@@ -106,7 +101,10 @@ public class AutoHarvestEvent implements Listener {
             return chunkScope;
         }
         try {
-            String regionId = Main.getIntegration().getRegionID(location);
+            String regionId = FarmerRegionAccess.resolveRegionId(location);
+            if (regionId == null) {
+                return null;
+            }
             Farmer farmer = FarmerAccess.findByRegionId(regionId);
             if (farmer == null) {
                 return null;
@@ -126,10 +124,7 @@ public class AutoHarvestEvent implements Listener {
             }
         }
         catch (RuntimeException exception) {
-            if (lookupFailureLogged.compareAndSet(false, true)) {
-                Main.getInstance().getLogger().log(Level.WARNING,
-                        "AutoHarvest could not resolve a Farmer pacing scope; harvesting was denied.", exception);
-            }
+            module.logError("AutoHarvest could not resolve a Farmer pacing scope; harvesting was denied.", exception);
             return null;
         }
     }
@@ -183,10 +178,7 @@ public class AutoHarvestEvent implements Listener {
             }
         }
         catch (RuntimeException exception) {
-            if (harvestFailureLogged.compareAndSet(false, true)) {
-                Main.getInstance().getLogger().log(Level.WARNING,
-                        "AutoHarvest rejected a crop operation after an unexpected runtime error.", exception);
-            }
+            module.logError("AutoHarvest rejected a crop operation after an unexpected runtime error.", exception);
         }
     }
 
@@ -208,13 +200,16 @@ public class AutoHarvestEvent implements Listener {
 
     private Farmer findFarmer(@NotNull Location location) {
         try {
-            String regionId = Main.getIntegration().getRegionID(location);
+            String regionId = FarmerRegionAccess.resolveRegionId(location);
+            if (regionId == null) {
+                return null;
+            }
             return FarmerAccess.findByRegionId(regionId);
         }
         catch (RuntimeException exception) {
-            if (lookupFailureLogged.compareAndSet(false, true)) {
-                Main.getInstance().getLogger().log(Level.WARNING,
-                        "AutoHarvest could not resolve the Farmer region; harvesting was denied.", exception);
+            AutoHarvest module = AutoHarvest.getInstance();
+            if (module != null) {
+                module.logError("AutoHarvest could not resolve the Farmer region; harvesting was denied.", exception);
             }
             return null;
         }
