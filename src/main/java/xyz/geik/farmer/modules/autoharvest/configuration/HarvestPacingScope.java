@@ -13,8 +13,15 @@ public enum HarvestPacingScope {
         if (value == null) {
             return FARMER;
         }
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        if ("PLAYER".equals(normalized)) {
+            return OWNER;
+        }
+        if ("LAND".equals(normalized)) {
+            return REGION;
+        }
         try {
-            return valueOf(value.trim().toUpperCase(Locale.ROOT));
+            return valueOf(normalized);
         }
         catch (IllegalArgumentException ignored) {
             return FARMER;

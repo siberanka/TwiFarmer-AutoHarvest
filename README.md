@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.6.0.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.7.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -52,84 +52,88 @@ When a newer semantic version exists, the localized message includes the `AutoHa
 ```yaml
 optimize-module:
   enable: false
-  harvest-control:
-    global-max-harvests-per-tick: 32
-    scope: "FARMER"
-    per-harvest-delay:
+  harvest:
+    max-harvests-per-tick: 32
+    separate-speed-for: "FARMER"
+    delay-between-harvests:
       enable: false
       ticks: 2
-    batch-pause:
+    pause-after-batch:
       enable: false
-      harvests-before-pause: 64
-      pause-ticks: 20
-  tracking:
-    mode: "EVENT_DRIVEN"
-    conditions:
-      growth-events: true
-      fertilize-events: true
-      crop-place-events: true
-      scan-on-chunk-load: false
-      scan-on-farmer-purchase: true
-      scan-on-player-join: true
-      scan-on-player-chunk-load: true
-      farmer-regions-only: true
-    reconcile-interval-ticks: 200
-    max-chunks-per-cycle: 2
-    max-tracked-chunks: 8192
-    max-concurrent-scans: 1
-    max-snapshot-captures-per-tick: 1
-    max-scan-starts-per-second: 4
-    max-sections-per-second: 32
-    max-block-checks-per-slice: 8192
-    max-pending-scans: 4096
-    max-candidates-per-scan: 512
-    max-candidate-admissions-per-tick: 32
-    purchase-radius-chunks: 8
-    bootstrap-radius-chunks: 3
-  adaptive-backpressure:
+      after-harvests: 64
+      ticks: 20
+  crop-search:
+    mode: "EVENTS"
+    triggers:
+      natural-growth: true
+      bone-meal: true
+      crop-placement: true
+      chunk-load: false
+      new-farmer: true
+      player-join: true
+      player-sees-chunk: true
+      farmer-areas-only: true
+    scan-radius:
+      new-farmer-radius-chunks: 8
+      player-radius-chunks: 3
+    repeat-search:
+      every-ticks: 200
+      chunks-per-run: 2
+    limits:
+      remembered-chunks: 8192
+      scans-at-once: 1
+      snapshots-per-tick: 1
+      new-scans-per-second: 4
+      sections-per-second: 32
+      blocks-per-async-task: 8192
+      waiting-scans: 4096
+      crops-found-per-scan: 512
+      crops-queued-per-tick: 32
+  server-load-protection:
     enable: true
-    slowdown-above-mspt: 35.0
-    pause-above-mspt: 45.0
+    slow-down-at-mspt: 35.0
+    stop-at-mspt: 45.0
     resume-below-mspt: 40.0
-    minimum-work-percent: 10
-    check-interval-ticks: 20
-    pause-above-region-task-delay-millis: 100
-    region-cooldown-ticks: 100
-  queue:
-    initial-delay-ticks: 2
-    continuation-delay-ticks: 1
-    max-jobs-per-run: 8
-    max-scheduler-submissions-per-tick: 8
-    max-pending-jobs: 8192
-    coalesce-duplicates: true
-  telemetry:
-    enable: true
-    log-interval-seconds: 300
+    minimum-speed-percent: 10
+    check-every-ticks: 20
+    region-delay-limit-millis: 100
+    region-recovery-ticks: 100
+  advanced:
+    harvest-queue:
+      first-run-delay-ticks: 2
+      next-run-delay-ticks: 1
+      harvests-per-run: 8
+      region-runs-per-tick: 8
+      waiting-harvests: 8192
+      merge-duplicate-blocks: true
+    logging:
+      enable: true
+      interval-seconds: 300
 ```
 
-The important controls are intentionally first. `global-max-harvests-per-tick` caps harvest actions across every world and Folia region. `scope` selects the independent timing boundary: `FARMER` is the recommended island boundary, `OWNER` shares timing across a player's Farmers, `REGION` uses the integration region ID, and `CHUNK` isolates each chunk.
+The important controls are intentionally first. `max-harvests-per-tick` caps harvest actions across every world and Folia region. `separate-speed-for` selects the independent timing boundary: `FARMER` is the recommended island boundary, `PLAYER` shares timing across a player's Farmers, `LAND` uses the integration land/region ID, and `CHUNK` isolates each chunk.
 
-Both user-facing cooldown systems are disabled by default. `per-harvest-delay` can add a steady delay between individual crops. `batch-pause` instead permits `harvests-before-pause` attempts in one scope, pauses only that scope for `pause-ticks`, and then continues automatically; unrelated Farmers/islands continue normally. Twenty ticks are approximately one second. Disabling both removes artificial Farmer cooldowns while the global queue, scheduler, and adaptive load protections remain active.
+Both user-facing cooldown systems are disabled by default. `delay-between-harvests` can add a steady delay between individual crops. `pause-after-batch` instead permits `after-harvests` attempts in one scope, pauses only that scope for `ticks`, and then continues automatically; unrelated Farmers/islands continue normally. Twenty ticks are approximately one second. Disabling both removes artificial Farmer cooldowns while the global queue, scheduler, and server load protections remain active.
 
-Config version 9 migrates the former `queue.global-max-jobs-per-tick` and `queue.per-scope-pacing` values into `harvest-control` after creating a backup. Existing enabled pacing remains enabled with the same scope and delay; new installations default to no artificial pause.
+Config version 10 renames and groups every optimization setting. Existing version 8 and 9 files are backed up and migrated automatically; valid values, enabled modes, custom unknown entries, and runtime behavior are preserved. Old `OWNER`, `REGION`, `EVENT_DRIVEN`, `PERIODIC_LOADED_CHUNKS`, and `HYBRID` values become the clearer `PLAYER`, `LAND`, `EVENTS`, `TIMER`, and `BOTH` names.
 
-The advanced hard limits remain global and bounded: `max-scheduler-submissions-per-tick` caps region task fan-out, and `max-sections-per-second` caps primary snapshot block reads in 4096-block units. `max-block-checks-per-slice` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests bounded reconciliation; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
+The advanced hard limits remain global and bounded: `region-runs-per-tick` caps region task fan-out, and `sections-per-second` caps primary snapshot block reads in 4096-block units. `blocks-per-async-task` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests another bounded search; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
 
-Adaptive backpressure uses Paper's rolling MSPT with hysteresis. Above `slowdown-above-mspt`, it gradually scales harvest jobs, region scheduler submissions, reconciliation chunks, snapshot captures, scan starts, section reads, and async slice sizes down toward `minimum-work-percent`. At `pause-above-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Telemetry logs cumulative queue/scan counters only at the configured low frequency and only when useful work, deferral, or failure exists.
+Server load protection uses Paper's rolling MSPT with hysteresis. Above `slow-down-at-mspt`, it gradually scales harvest jobs, region scheduler submissions, repeat searches, snapshot captures, scan starts, section reads, and async task sizes down toward `minimum-speed-percent`. At `stop-at-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Advanced logging emits cumulative counters only at the configured low frequency and only when useful work, deferral, or failure exists.
 
-The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, Farmer scope admission, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Candidate admission is sliced by `max-candidate-admissions-per-tick`, empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or reconciliation is due.
+The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed asynchronously, while snapshot capture, Farmer scope admission, live world validation, block mutation, item drops, Farmer lookup, and inventory updates stay on the owning `RegionScheduler` thread. Discovered crop queueing is sliced by `crops-queued-per-tick`, empty sections are skipped, chunks are never force-loaded, duplicate jobs/scans are coalesced, unload/reload generations reject stale work, and idle dispatchers park until work or a repeat search is due.
 
 Snapshot section indexes are translated relative to the world's minimum build height. Worlds using negative Y values, including the standard `-64..320` range on Leaf, therefore scan every section without accessing a negative snapshot index. A failed initial discovery is retained in the bounded reconciliation registry so a transient capture or async scan failure cannot permanently hide an already mature crop chunk.
 
-Dense chunks discover up to `max-candidates-per-scan` crops as one bounded batch. Reconciliation skips a chunk while its harvest queue is still draining. When a candidate-limited chunk queue becomes empty, a single drain callback immediately requests the next bounded scan, producing a slow continuous stream without polling every loaded chunk or repeatedly scanning the same still-pending crops.
+Dense chunks discover up to `crops-found-per-scan` crops as one bounded batch. Repeat search skips a chunk while its harvest queue is still draining. When a candidate-limited chunk queue becomes empty, a single drain callback immediately requests the next bounded scan, producing a slow continuous stream without polling every loaded chunk or repeatedly scanning the same still-pending crops.
 
 ## Crop Tracking
 
-- `EVENT_DRIVEN` is the default. Growth/fertilize signals harvest immediately, while only known crop or deferred chunks receive slow reconciliation.
-- `PERIODIC_LOADED_CHUNKS` disables immediate growth harvesting and rotates through a bounded registry of known loaded chunks.
-- `HYBRID` combines immediate events with bounded loaded-chunk rotation.
-- Every signal under `tracking.conditions` can be enabled independently. On large servers, keep broad `scan-on-chunk-load: false`; `scan-on-player-chunk-load: true` performs bounded, near-player discovery only when the player is inside an enabled Farmer region.
-- With `farmer-regions-only: true`, event and player bootstrap tracking is accepted only around an enabled Farmer (or when `withoutFarmer` is active). Set it to `false` if periodic mode must discover chunk-loader farms with no nearby player.
+- `EVENTS` is the default. Growth and bone-meal signals harvest immediately, while only known crop or deferred chunks receive slow repeat searches.
+- `TIMER` disables immediate growth harvesting and rotates through a bounded registry of known loaded chunks.
+- `BOTH` combines immediate events with bounded loaded-chunk rotation.
+- Every signal under `crop-search.triggers` can be enabled independently. On large servers, keep broad `chunk-load: false`; `player-sees-chunk: true` performs bounded, near-player discovery only when the player is inside an enabled Farmer area.
+- With `farmer-areas-only: true`, event and player search triggers are accepted only around an enabled Farmer (or when `withoutFarmer` is active). Set it to `false` if timer mode must discover chunk-loader farms with no nearby player.
 - Farmer purchase and GUI enable scans are nearest-first and inspect only chunks already sent to the player. Known crop chunks move into a size-bounded dormant registry on unload and are rescanned when loaded again, so leaving and returning to a farm does not require toggling AutoHarvest. Module reload and disable invalidate all queued state.
 
 ## Stacked Crops

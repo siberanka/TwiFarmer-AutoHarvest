@@ -28,8 +28,18 @@ public enum TrackingMode {
         if (value == null) {
             return EVENT_DRIVEN;
         }
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        if ("EVENTS".equals(normalized)) {
+            return EVENT_DRIVEN;
+        }
+        if ("TIMER".equals(normalized)) {
+            return PERIODIC_LOADED_CHUNKS;
+        }
+        if ("BOTH".equals(normalized)) {
+            return HYBRID;
+        }
         try {
-            return valueOf(value.trim().toUpperCase(Locale.ROOT));
+            return valueOf(normalized);
         }
         catch (IllegalArgumentException ignored) {
             return EVENT_DRIVEN;

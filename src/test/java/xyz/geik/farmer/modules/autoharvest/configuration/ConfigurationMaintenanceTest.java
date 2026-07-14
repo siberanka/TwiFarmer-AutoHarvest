@@ -161,43 +161,41 @@ class ConfigurationMaintenanceTest {
         assertEquals(List.of("BAMBOO", "KELP"), repaired.getStringList("stacked-crops.items"));
         assertEquals(32, repaired.getInt("stacked-crops.max-segments-per-harvest"));
         assertFalse(repaired.getBoolean("optimize-module.enable"));
-        assertEquals(2, repaired.getInt("optimize-module.queue.initial-delay-ticks"));
-        assertEquals(1, repaired.getInt("optimize-module.queue.continuation-delay-ticks"));
-        assertEquals(8, repaired.getInt("optimize-module.queue.max-jobs-per-run"));
-        assertEquals(32, repaired.getInt("optimize-module.harvest-control.global-max-harvests-per-tick"));
-        assertEquals(8, repaired.getInt("optimize-module.queue.max-scheduler-submissions-per-tick"));
-        assertEquals(8192, repaired.getInt("optimize-module.queue.max-pending-jobs"));
-        assertTrue(repaired.getBoolean("optimize-module.queue.coalesce-duplicates"));
-        assertFalse(repaired.getBoolean("optimize-module.harvest-control.per-harvest-delay.enable"));
-        assertEquals("FARMER", repaired.getString("optimize-module.harvest-control.scope"));
-        assertEquals(2, repaired.getInt("optimize-module.harvest-control.per-harvest-delay.ticks"));
-        assertFalse(repaired.getBoolean("optimize-module.harvest-control.batch-pause.enable"));
-        assertEquals(64, repaired.getInt(
-                "optimize-module.harvest-control.batch-pause.harvests-before-pause"));
-        assertEquals(20, repaired.getInt("optimize-module.harvest-control.batch-pause.pause-ticks"));
+        assertEquals(2, repaired.getInt("optimize-module.advanced.harvest-queue.first-run-delay-ticks"));
+        assertEquals(1, repaired.getInt("optimize-module.advanced.harvest-queue.next-run-delay-ticks"));
+        assertEquals(8, repaired.getInt("optimize-module.advanced.harvest-queue.harvests-per-run"));
+        assertEquals(32, repaired.getInt("optimize-module.harvest.max-harvests-per-tick"));
+        assertEquals(8, repaired.getInt("optimize-module.advanced.harvest-queue.region-runs-per-tick"));
+        assertEquals(8192, repaired.getInt("optimize-module.advanced.harvest-queue.waiting-harvests"));
+        assertTrue(repaired.getBoolean("optimize-module.advanced.harvest-queue.merge-duplicate-blocks"));
+        assertFalse(repaired.getBoolean("optimize-module.harvest.delay-between-harvests.enable"));
+        assertEquals("FARMER", repaired.getString("optimize-module.harvest.separate-speed-for"));
+        assertEquals(2, repaired.getInt("optimize-module.harvest.delay-between-harvests.ticks"));
+        assertFalse(repaired.getBoolean("optimize-module.harvest.pause-after-batch.enable"));
+        assertEquals(64, repaired.getInt("optimize-module.harvest.pause-after-batch.after-harvests"));
+        assertEquals(20, repaired.getInt("optimize-module.harvest.pause-after-batch.ticks"));
         assertFalse(repaired.contains("optimize-module.queue.per-scope-pacing"));
-        assertEquals(200, repaired.getInt("optimize-module.tracking.reconcile-interval-ticks"));
-        assertEquals(4096, repaired.getInt("optimize-module.tracking.max-pending-scans"));
-        assertEquals("EVENT_DRIVEN", repaired.getString("optimize-module.tracking.mode"));
-        assertTrue(repaired.getBoolean(
-                "optimize-module.tracking.conditions.scan-on-player-chunk-load"));
-        assertEquals(32, repaired.getInt("optimize-module.tracking.max-sections-per-second"));
-        assertEquals(512, repaired.getInt("optimize-module.tracking.max-candidates-per-scan"));
-        assertEquals(32, repaired.getInt("optimize-module.tracking.max-candidate-admissions-per-tick"));
-        assertEquals(35.0, repaired.getDouble("optimize-module.adaptive-backpressure.slowdown-above-mspt"));
-        assertEquals(45.0, repaired.getDouble("optimize-module.adaptive-backpressure.pause-above-mspt"));
-        assertEquals(40.0, repaired.getDouble("optimize-module.adaptive-backpressure.resume-below-mspt"));
-        assertEquals(10, repaired.getInt("optimize-module.adaptive-backpressure.minimum-work-percent"));
+        assertEquals(200, repaired.getInt("optimize-module.crop-search.repeat-search.every-ticks"));
+        assertEquals(4096, repaired.getInt("optimize-module.crop-search.limits.waiting-scans"));
+        assertEquals("EVENTS", repaired.getString("optimize-module.crop-search.mode"));
+        assertTrue(repaired.getBoolean("optimize-module.crop-search.triggers.player-sees-chunk"));
+        assertEquals(32, repaired.getInt("optimize-module.crop-search.limits.sections-per-second"));
+        assertEquals(512, repaired.getInt("optimize-module.crop-search.limits.crops-found-per-scan"));
+        assertEquals(32, repaired.getInt("optimize-module.crop-search.limits.crops-queued-per-tick"));
+        assertEquals(35.0, repaired.getDouble("optimize-module.server-load-protection.slow-down-at-mspt"));
+        assertEquals(45.0, repaired.getDouble("optimize-module.server-load-protection.stop-at-mspt"));
+        assertEquals(40.0, repaired.getDouble("optimize-module.server-load-protection.resume-below-mspt"));
+        assertEquals(10, repaired.getInt("optimize-module.server-load-protection.minimum-speed-percent"));
         assertTrue(repaired.getBoolean("update-checker.enable"));
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(9, repaired.getInt("config-version"));
+        assertEquals(10, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 
     @Test
-    void migratesLegacyScopePacingWithoutChangingItsBehavior() throws Exception {
+    void migratesV8ScopePacingWithoutChangingItsBehavior() throws Exception {
         File target = temporaryDirectory.resolve("config.yml").toFile();
         Files.writeString(target.toPath(), """
                 config-version: 8
@@ -218,7 +216,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(9, migrated.getInt("config-version"));
+        assertEquals(10, migrated.getInt("config-version"));
         assertEquals(47, snapshot.optimization().globalMaxJobsPerTick());
         assertTrue(snapshot.optimization().perHarvestDelayEnabled());
         assertEquals(HarvestPacingScope.REGION, snapshot.optimization().harvestScope());
@@ -226,7 +224,141 @@ class ConfigurationMaintenanceTest {
         assertFalse(snapshot.optimization().batchPauseEnabled());
         assertFalse(migrated.contains("optimize-module.queue.global-max-jobs-per-tick"));
         assertFalse(migrated.contains("optimize-module.queue.per-scope-pacing"));
+        assertEquals(47, migrated.getInt("optimize-module.harvest.max-harvests-per-tick"));
+        assertEquals("LAND", migrated.getString("optimize-module.harvest.separate-speed-for"));
         assertEquals("preserved", migrated.getString("custom-extension"));
+    }
+
+    @Test
+    void migratesV9OptimizationNamesAndPreservesUnknownEntries() throws Exception {
+        File target = temporaryDirectory.resolve("config.yml").toFile();
+        Files.writeString(target.toPath(), """
+                config-version: 9
+                status: true
+                optimize-module:
+                  enable: true
+                  harvest-control:
+                    global-max-harvests-per-tick: 47
+                    scope: "OWNER"
+                    per-harvest-delay:
+                      enable: true
+                      ticks: 7
+                    batch-pause:
+                      enable: true
+                      harvests-before-pause: 11
+                      pause-ticks: 40
+                  tracking:
+                    mode: "HYBRID"
+                    conditions:
+                      growth-events: false
+                      fertilize-events: false
+                      crop-place-events: false
+                      scan-on-chunk-load: true
+                      scan-on-farmer-purchase: false
+                      scan-on-player-join: false
+                      scan-on-player-chunk-load: false
+                      farmer-regions-only: false
+                    reconcile-interval-ticks: 400
+                    max-chunks-per-cycle: 3
+                    max-tracked-chunks: 9000
+                    max-concurrent-scans: 2
+                    max-snapshot-captures-per-tick: 2
+                    max-scan-starts-per-second: 5
+                    max-sections-per-second: 40
+                    max-block-checks-per-slice: 6000
+                    max-pending-scans: 5000
+                    max-candidates-per-scan: 600
+                    max-candidate-admissions-per-tick: 40
+                    purchase-radius-chunks: 9
+                    bootstrap-radius-chunks: 4
+                    custom-extension: preserved
+                  adaptive-backpressure:
+                    enable: false
+                    slowdown-above-mspt: 36.0
+                    pause-above-mspt: 46.0
+                    resume-below-mspt: 41.0
+                    minimum-work-percent: 15
+                    check-interval-ticks: 30
+                    pause-above-region-task-delay-millis: 120
+                    region-cooldown-ticks: 140
+                  queue:
+                    initial-delay-ticks: 3
+                    continuation-delay-ticks: 2
+                    max-jobs-per-run: 9
+                    max-scheduler-submissions-per-tick: 10
+                    max-pending-jobs: 9000
+                    coalesce-duplicates: false
+                  telemetry:
+                    enable: false
+                    log-interval-seconds: 600
+                """, StandardCharsets.UTF_8);
+
+        ConfigurationMaintenance.ConfigSnapshot snapshot = reconcileConfig(target);
+        YamlConfiguration migrated = YamlConfiguration.loadConfiguration(target);
+
+        assertTrue(snapshot.repaired());
+        assertEquals(1, backupCount());
+        assertEquals(10, migrated.getInt("config-version"));
+        assertEquals(3, snapshot.optimization().initialDelayTicks());
+        assertEquals(2, snapshot.optimization().continuationDelayTicks());
+        assertEquals(9, snapshot.optimization().maxJobsPerRun());
+        assertEquals(47, snapshot.optimization().globalMaxJobsPerTick());
+        assertEquals(10, snapshot.optimization().maxSchedulerSubmissionsPerTick());
+        assertEquals(9000, snapshot.optimization().maxPendingJobs());
+        assertFalse(snapshot.optimization().coalesceDuplicates());
+        assertEquals(HarvestPacingScope.OWNER, snapshot.optimization().harvestScope());
+        assertTrue(snapshot.optimization().perHarvestDelayEnabled());
+        assertEquals(7, snapshot.optimization().perHarvestDelayTicks());
+        assertTrue(snapshot.optimization().batchPauseEnabled());
+        assertEquals(11, snapshot.optimization().harvestsBeforePause());
+        assertEquals(40, snapshot.optimization().batchPauseTicks());
+        assertEquals(TrackingMode.HYBRID, snapshot.tracking().mode());
+        assertFalse(snapshot.tracking().growthEvents());
+        assertFalse(snapshot.tracking().fertilizeEvents());
+        assertFalse(snapshot.tracking().cropPlaceEvents());
+        assertTrue(snapshot.tracking().scanOnChunkLoad());
+        assertFalse(snapshot.tracking().scanOnFarmerPurchase());
+        assertFalse(snapshot.tracking().scanOnPlayerJoin());
+        assertFalse(snapshot.tracking().scanOnPlayerChunkLoad());
+        assertFalse(snapshot.tracking().farmerRegionsOnly());
+        assertEquals(400, snapshot.tracking().reconcileIntervalTicks());
+        assertEquals(3, snapshot.tracking().maxChunksPerCycle());
+        assertEquals(9000, snapshot.tracking().maxTrackedChunks());
+        assertEquals(2, snapshot.tracking().maxConcurrentScans());
+        assertEquals(2, snapshot.tracking().maxSnapshotCapturesPerTick());
+        assertEquals(5, snapshot.tracking().maxScanStartsPerSecond());
+        assertEquals(40, snapshot.tracking().maxSectionsPerSecond());
+        assertEquals(6000, snapshot.tracking().maxBlockChecksPerSlice());
+        assertEquals(5000, snapshot.tracking().maxPendingScans());
+        assertEquals(600, snapshot.tracking().maxCandidatesPerScan());
+        assertEquals(40, snapshot.tracking().maxCandidateAdmissionsPerTick());
+        assertEquals(9, snapshot.tracking().purchaseRadiusChunks());
+        assertEquals(4, snapshot.tracking().bootstrapRadiusChunks());
+        assertFalse(snapshot.backpressure().enabled());
+        assertEquals(36.0, snapshot.backpressure().slowdownAboveMspt());
+        assertEquals(46.0, snapshot.backpressure().pauseAboveMspt());
+        assertEquals(41.0, snapshot.backpressure().resumeBelowMspt());
+        assertEquals(15, snapshot.backpressure().minimumWorkPercent());
+        assertEquals(30, snapshot.backpressure().checkIntervalTicks());
+        assertEquals(120, snapshot.backpressure().pauseAboveRegionTaskDelayMillis());
+        assertEquals(140, snapshot.backpressure().regionCooldownTicks());
+        assertFalse(snapshot.telemetry().enabled());
+        assertEquals(600, snapshot.telemetry().logIntervalSeconds());
+        assertEquals("PLAYER", migrated.getString("optimize-module.harvest.separate-speed-for"));
+        assertEquals("BOTH", migrated.getString("optimize-module.crop-search.mode"));
+        assertEquals(9, migrated.getInt("optimize-module.crop-search.scan-radius.new-farmer-radius-chunks"));
+        assertEquals(4, migrated.getInt("optimize-module.crop-search.scan-radius.player-radius-chunks"));
+        assertTrue(Files.readString(target.toPath()).contains(
+                "# Visible chunk radius searched around players on join, reload and movement."));
+        assertEquals("preserved", migrated.getString("optimize-module.tracking.custom-extension"));
+        assertFalse(migrated.contains("optimize-module.harvest-control"));
+        assertFalse(migrated.contains("optimize-module.adaptive-backpressure"));
+        assertFalse(migrated.contains("optimize-module.queue"));
+        assertFalse(migrated.contains("optimize-module.telemetry"));
+
+        ConfigurationMaintenance.ConfigSnapshot secondPass = reconcileConfig(target);
+        assertFalse(secondPass.repaired());
+        assertEquals(1, backupCount());
     }
 
     @Test
@@ -240,7 +372,8 @@ class ConfigurationMaintenanceTest {
         assertEquals(1, backupCount());
         assertTrue(Files.readString(firstBackup(temporaryDirectory)).contains("unterminated"));
         assertFalse(snapshot.config().isStatus());
-        assertNotNull(YamlConfiguration.loadConfiguration(target).getConfigurationSection("optimize-module.queue"));
+        assertNotNull(YamlConfiguration.loadConfiguration(target)
+                .getConfigurationSection("optimize-module.advanced.harvest-queue"));
     }
 
     @Test

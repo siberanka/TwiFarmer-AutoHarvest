@@ -40,15 +40,28 @@ public final class ConfigurationMaintenance {
     private static final DateTimeFormatter BACKUP_TIMESTAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmssSSS");
     private static final String OPTIMIZE_MODULE = "optimize-module";
-    private static final String HARVEST_CONTROL = OPTIMIZE_MODULE + ".harvest-control";
-    private static final String PER_HARVEST_DELAY = HARVEST_CONTROL + ".per-harvest-delay";
-    private static final String BATCH_PAUSE = HARVEST_CONTROL + ".batch-pause";
-    private static final String QUEUE = OPTIMIZE_MODULE + ".queue";
-    private static final String LEGACY_SCOPE_PACING = QUEUE + ".per-scope-pacing";
-    private static final String TRACKING = OPTIMIZE_MODULE + ".tracking";
-    private static final String CONDITIONS = TRACKING + ".conditions";
-    private static final String BACKPRESSURE = OPTIMIZE_MODULE + ".adaptive-backpressure";
-    private static final String TELEMETRY = OPTIMIZE_MODULE + ".telemetry";
+    private static final String HARVEST = OPTIMIZE_MODULE + ".harvest";
+    private static final String HARVEST_DELAY = HARVEST + ".delay-between-harvests";
+    private static final String HARVEST_PAUSE = HARVEST + ".pause-after-batch";
+    private static final String CROP_SEARCH = OPTIMIZE_MODULE + ".crop-search";
+    private static final String SEARCH_TRIGGERS = CROP_SEARCH + ".triggers";
+    private static final String SCAN_RADIUS = CROP_SEARCH + ".scan-radius";
+    private static final String REPEAT_SEARCH = CROP_SEARCH + ".repeat-search";
+    private static final String SEARCH_LIMITS = CROP_SEARCH + ".limits";
+    private static final String LOAD_PROTECTION = OPTIMIZE_MODULE + ".server-load-protection";
+    private static final String ADVANCED = OPTIMIZE_MODULE + ".advanced";
+    private static final String HARVEST_QUEUE = ADVANCED + ".harvest-queue";
+    private static final String LOGGING = ADVANCED + ".logging";
+
+    private static final String V9_HARVEST = OPTIMIZE_MODULE + ".harvest-control";
+    private static final String V9_HARVEST_DELAY = V9_HARVEST + ".per-harvest-delay";
+    private static final String V9_HARVEST_PAUSE = V9_HARVEST + ".batch-pause";
+    private static final String V9_QUEUE = OPTIMIZE_MODULE + ".queue";
+    private static final String V8_SCOPE_PACING = V9_QUEUE + ".per-scope-pacing";
+    private static final String V9_TRACKING = OPTIMIZE_MODULE + ".tracking";
+    private static final String V9_CONDITIONS = V9_TRACKING + ".conditions";
+    private static final String V9_BACKPRESSURE = OPTIMIZE_MODULE + ".adaptive-backpressure";
+    private static final String V9_TELEMETRY = OPTIMIZE_MODULE + ".telemetry";
     private static final String UPDATE_CHECKER = "update-checker";
     private static final String STACKED_CROPS = "stacked-crops";
 
@@ -114,8 +127,10 @@ public final class ConfigurationMaintenance {
 
     private static boolean repairConfig(YamlConfiguration configuration, YamlConfiguration defaults) {
         boolean changed = false;
-        changed |= migrateLegacyScopePacing(configuration);
-        changed |= repairInteger(configuration, defaults, "config-version", 9, 9);
+        changed |= migrateV8ScopePacing(configuration);
+        changed |= migrateV9OptimizationPaths(configuration);
+        changed |= normalizeFriendlyOptionNames(configuration);
+        changed |= repairInteger(configuration, defaults, "config-version", 10, 10);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -136,76 +151,77 @@ public final class ConfigurationMaintenance {
         changed |= repairInteger(configuration, defaults, UPDATE_CHECKER + ".request-timeout-seconds", 3, 60);
 
         changed |= ensureSection(configuration, OPTIMIZE_MODULE);
-        changed |= ensureSection(configuration, HARVEST_CONTROL);
-        changed |= ensureSection(configuration, PER_HARVEST_DELAY);
-        changed |= ensureSection(configuration, BATCH_PAUSE);
-        changed |= ensureSection(configuration, QUEUE);
-        changed |= ensureSection(configuration, TRACKING);
-        changed |= ensureSection(configuration, CONDITIONS);
-        changed |= ensureSection(configuration, BACKPRESSURE);
-        changed |= ensureSection(configuration, TELEMETRY);
+        changed |= ensureSection(configuration, HARVEST);
+        changed |= ensureSection(configuration, HARVEST_DELAY);
+        changed |= ensureSection(configuration, HARVEST_PAUSE);
+        changed |= ensureSection(configuration, CROP_SEARCH);
+        changed |= ensureSection(configuration, SEARCH_TRIGGERS);
+        changed |= ensureSection(configuration, SCAN_RADIUS);
+        changed |= ensureSection(configuration, REPEAT_SEARCH);
+        changed |= ensureSection(configuration, SEARCH_LIMITS);
+        changed |= ensureSection(configuration, LOAD_PROTECTION);
+        changed |= ensureSection(configuration, ADVANCED);
+        changed |= ensureSection(configuration, HARVEST_QUEUE);
+        changed |= ensureSection(configuration, LOGGING);
         changed |= repairBoolean(configuration, defaults, OPTIMIZE_MODULE + ".enable");
-        changed |= repairInteger(configuration, defaults,
-                HARVEST_CONTROL + ".global-max-harvests-per-tick", 1, 256);
-        changed |= repairString(configuration, defaults, HARVEST_CONTROL + ".scope",
-                ConfigurationMaintenance::isHarvestPacingScope);
-        changed |= repairBoolean(configuration, defaults, PER_HARVEST_DELAY + ".enable");
-        changed |= repairInteger(configuration, defaults, PER_HARVEST_DELAY + ".ticks", 1, 200);
-        changed |= repairBoolean(configuration, defaults, BATCH_PAUSE + ".enable");
-        changed |= repairInteger(configuration, defaults, BATCH_PAUSE + ".harvests-before-pause", 1, 10_000);
-        changed |= repairInteger(configuration, defaults, BATCH_PAUSE + ".pause-ticks", 1, 72_000);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".initial-delay-ticks", 1, 20);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".continuation-delay-ticks", 1, 20);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".max-jobs-per-run", 1, 64);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".max-scheduler-submissions-per-tick", 1, 64);
-        changed |= repairInteger(configuration, defaults, QUEUE + ".max-pending-jobs", 64, 16_384);
-        changed |= repairBoolean(configuration, defaults, QUEUE + ".coalesce-duplicates");
-        changed |= repairString(configuration, defaults, TRACKING + ".mode",
-                value -> isTrackingMode(value));
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".growth-events");
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".fertilize-events");
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".crop-place-events");
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-chunk-load");
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-farmer-purchase");
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-player-join");
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".scan-on-player-chunk-load");
-        changed |= repairBoolean(configuration, defaults, CONDITIONS + ".farmer-regions-only");
-        changed |= repairInteger(configuration, defaults, TRACKING + ".reconcile-interval-ticks", 20, 72_000);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-chunks-per-cycle", 1, 32);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-tracked-chunks", 64, 32_768);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-concurrent-scans", 1, 4);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-snapshot-captures-per-tick", 1, 4);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-scan-starts-per-second", 1, 20);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-sections-per-second", 1, 256);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-block-checks-per-slice", 256, 16_384);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-pending-scans", 64, 16_384);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".max-candidates-per-scan", 16, 1_024);
-        changed |= repairInteger(configuration, defaults,
-                TRACKING + ".max-candidate-admissions-per-tick", 1, 128);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".purchase-radius-chunks", 1, 32);
-        changed |= repairInteger(configuration, defaults, TRACKING + ".bootstrap-radius-chunks", 1, 16);
-        changed |= repairBoolean(configuration, defaults, BACKPRESSURE + ".enable");
-        changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".slowdown-above-mspt", 10.0, 99.0);
-        changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".pause-above-mspt", 20.0, 100.0);
-        changed |= repairDouble(configuration, defaults, BACKPRESSURE + ".resume-below-mspt", 10.0, 99.0);
-        changed |= repairInteger(configuration, defaults, BACKPRESSURE + ".minimum-work-percent", 1, 100);
-        changed |= repairInteger(configuration, defaults, BACKPRESSURE + ".check-interval-ticks", 1, 200);
-        changed |= repairInteger(configuration, defaults,
-                BACKPRESSURE + ".pause-above-region-task-delay-millis", 50, 5_000);
-        changed |= repairInteger(configuration, defaults, BACKPRESSURE + ".region-cooldown-ticks", 20, 1_200);
-        changed |= repairBoolean(configuration, defaults, TELEMETRY + ".enable");
-        changed |= repairInteger(configuration, defaults, TELEMETRY + ".log-interval-seconds", 30, 3_600);
+        changed |= repairInteger(configuration, defaults, HARVEST + ".max-harvests-per-tick", 1, 256);
+        changed |= repairString(configuration, defaults, HARVEST + ".separate-speed-for",
+                ConfigurationMaintenance::isFriendlyHarvestScope);
+        changed |= repairBoolean(configuration, defaults, HARVEST_DELAY + ".enable");
+        changed |= repairInteger(configuration, defaults, HARVEST_DELAY + ".ticks", 1, 200);
+        changed |= repairBoolean(configuration, defaults, HARVEST_PAUSE + ".enable");
+        changed |= repairInteger(configuration, defaults, HARVEST_PAUSE + ".after-harvests", 1, 10_000);
+        changed |= repairInteger(configuration, defaults, HARVEST_PAUSE + ".ticks", 1, 72_000);
+        changed |= repairString(configuration, defaults, CROP_SEARCH + ".mode",
+                ConfigurationMaintenance::isFriendlyTrackingMode);
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".natural-growth");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".bone-meal");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".crop-placement");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".chunk-load");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".new-farmer");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".player-join");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".player-sees-chunk");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".farmer-areas-only");
+        changed |= repairInteger(configuration, defaults, SCAN_RADIUS + ".new-farmer-radius-chunks", 1, 32);
+        changed |= repairInteger(configuration, defaults, SCAN_RADIUS + ".player-radius-chunks", 1, 16);
+        changed |= repairInteger(configuration, defaults, REPEAT_SEARCH + ".every-ticks", 20, 72_000);
+        changed |= repairInteger(configuration, defaults, REPEAT_SEARCH + ".chunks-per-run", 1, 32);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".remembered-chunks", 64, 32_768);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".scans-at-once", 1, 4);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".snapshots-per-tick", 1, 4);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".new-scans-per-second", 1, 20);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".sections-per-second", 1, 256);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".blocks-per-async-task", 256, 16_384);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".waiting-scans", 64, 16_384);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".crops-found-per-scan", 16, 1_024);
+        changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".crops-queued-per-tick", 1, 128);
+        changed |= repairBoolean(configuration, defaults, LOAD_PROTECTION + ".enable");
+        changed |= repairDouble(configuration, defaults, LOAD_PROTECTION + ".slow-down-at-mspt", 10.0, 99.0);
+        changed |= repairDouble(configuration, defaults, LOAD_PROTECTION + ".stop-at-mspt", 20.0, 100.0);
+        changed |= repairDouble(configuration, defaults, LOAD_PROTECTION + ".resume-below-mspt", 10.0, 99.0);
+        changed |= repairInteger(configuration, defaults, LOAD_PROTECTION + ".minimum-speed-percent", 1, 100);
+        changed |= repairInteger(configuration, defaults, LOAD_PROTECTION + ".check-every-ticks", 1, 200);
+        changed |= repairInteger(configuration, defaults, LOAD_PROTECTION + ".region-delay-limit-millis", 50, 5_000);
+        changed |= repairInteger(configuration, defaults, LOAD_PROTECTION + ".region-recovery-ticks", 20, 1_200);
+        changed |= repairInteger(configuration, defaults, HARVEST_QUEUE + ".first-run-delay-ticks", 1, 20);
+        changed |= repairInteger(configuration, defaults, HARVEST_QUEUE + ".next-run-delay-ticks", 1, 20);
+        changed |= repairInteger(configuration, defaults, HARVEST_QUEUE + ".harvests-per-run", 1, 64);
+        changed |= repairInteger(configuration, defaults, HARVEST_QUEUE + ".region-runs-per-tick", 1, 64);
+        changed |= repairInteger(configuration, defaults, HARVEST_QUEUE + ".waiting-harvests", 64, 16_384);
+        changed |= repairBoolean(configuration, defaults, HARVEST_QUEUE + ".merge-duplicate-blocks");
+        changed |= repairBoolean(configuration, defaults, LOGGING + ".enable");
+        changed |= repairInteger(configuration, defaults, LOGGING + ".interval-seconds", 30, 3_600);
 
-        if (configuration.getDouble(BACKPRESSURE + ".resume-below-mspt")
-                >= configuration.getDouble(BACKPRESSURE + ".pause-above-mspt")
-                || configuration.getDouble(BACKPRESSURE + ".slowdown-above-mspt")
-                >= configuration.getDouble(BACKPRESSURE + ".pause-above-mspt")) {
-            configuration.set(BACKPRESSURE + ".slowdown-above-mspt",
-                    defaults.getDouble(BACKPRESSURE + ".slowdown-above-mspt"));
-            configuration.set(BACKPRESSURE + ".pause-above-mspt",
-                    defaults.getDouble(BACKPRESSURE + ".pause-above-mspt"));
-            configuration.set(BACKPRESSURE + ".resume-below-mspt",
-                    defaults.getDouble(BACKPRESSURE + ".resume-below-mspt"));
+        if (configuration.getDouble(LOAD_PROTECTION + ".resume-below-mspt")
+                >= configuration.getDouble(LOAD_PROTECTION + ".stop-at-mspt")
+                || configuration.getDouble(LOAD_PROTECTION + ".slow-down-at-mspt")
+                >= configuration.getDouble(LOAD_PROTECTION + ".stop-at-mspt")) {
+            configuration.set(LOAD_PROTECTION + ".slow-down-at-mspt",
+                    defaults.getDouble(LOAD_PROTECTION + ".slow-down-at-mspt"));
+            configuration.set(LOAD_PROTECTION + ".stop-at-mspt",
+                    defaults.getDouble(LOAD_PROTECTION + ".stop-at-mspt"));
+            configuration.set(LOAD_PROTECTION + ".resume-below-mspt",
+                    defaults.getDouble(LOAD_PROTECTION + ".resume-below-mspt"));
             changed = true;
         }
 
@@ -213,6 +229,7 @@ public final class ConfigurationMaintenance {
             configuration.set("checkAllDirections", false);
             changed = true;
         }
+        changed |= addMissingComments(configuration, defaults, OPTIMIZE_MODULE);
         return changed;
     }
 
@@ -233,24 +250,179 @@ public final class ConfigurationMaintenance {
         return changed;
     }
 
-    private static boolean migrateLegacyScopePacing(YamlConfiguration configuration) {
+    private static boolean migrateV8ScopePacing(YamlConfiguration configuration) {
         boolean changed = false;
-        String legacyGlobalLimit = QUEUE + ".global-max-jobs-per-tick";
-        String globalLimit = HARVEST_CONTROL + ".global-max-harvests-per-tick";
+        String legacyGlobalLimit = V9_QUEUE + ".global-max-jobs-per-tick";
+        String globalLimit = V9_HARVEST + ".global-max-harvests-per-tick";
         if (configuration.contains(legacyGlobalLimit)) {
             copyIfMissing(configuration, legacyGlobalLimit, globalLimit);
             configuration.set(legacyGlobalLimit, null);
             changed = true;
         }
 
-        if (configuration.isConfigurationSection(LEGACY_SCOPE_PACING)) {
-            copyIfMissing(configuration, LEGACY_SCOPE_PACING + ".scope", HARVEST_CONTROL + ".scope");
-            copyIfMissing(configuration, LEGACY_SCOPE_PACING + ".enable", PER_HARVEST_DELAY + ".enable");
-            copyIfMissing(configuration, LEGACY_SCOPE_PACING + ".delay-ticks", PER_HARVEST_DELAY + ".ticks");
-            configuration.set(LEGACY_SCOPE_PACING, null);
+        if (configuration.isConfigurationSection(V8_SCOPE_PACING)) {
+            copyIfMissing(configuration, V8_SCOPE_PACING + ".scope", V9_HARVEST + ".scope");
+            copyIfMissing(configuration, V8_SCOPE_PACING + ".enable", V9_HARVEST_DELAY + ".enable");
+            copyIfMissing(configuration, V8_SCOPE_PACING + ".delay-ticks", V9_HARVEST_DELAY + ".ticks");
+            configuration.set(V8_SCOPE_PACING, null);
             changed = true;
         }
         return changed;
+    }
+
+    private static boolean migrateV9OptimizationPaths(YamlConfiguration configuration) {
+        boolean changed = false;
+        changed |= move(configuration, V9_HARVEST + ".global-max-harvests-per-tick",
+                HARVEST + ".max-harvests-per-tick");
+        changed |= move(configuration, V9_HARVEST + ".scope", HARVEST + ".separate-speed-for");
+        changed |= move(configuration, V9_HARVEST_DELAY + ".enable", HARVEST_DELAY + ".enable");
+        changed |= move(configuration, V9_HARVEST_DELAY + ".ticks", HARVEST_DELAY + ".ticks");
+        changed |= move(configuration, V9_HARVEST_PAUSE + ".enable", HARVEST_PAUSE + ".enable");
+        changed |= move(configuration, V9_HARVEST_PAUSE + ".harvests-before-pause",
+                HARVEST_PAUSE + ".after-harvests");
+        changed |= move(configuration, V9_HARVEST_PAUSE + ".pause-ticks", HARVEST_PAUSE + ".ticks");
+
+        changed |= move(configuration, V9_TRACKING + ".mode", CROP_SEARCH + ".mode");
+        changed |= move(configuration, V9_CONDITIONS + ".growth-events", SEARCH_TRIGGERS + ".natural-growth");
+        changed |= move(configuration, V9_CONDITIONS + ".fertilize-events", SEARCH_TRIGGERS + ".bone-meal");
+        changed |= move(configuration, V9_CONDITIONS + ".crop-place-events", SEARCH_TRIGGERS + ".crop-placement");
+        changed |= move(configuration, V9_CONDITIONS + ".scan-on-chunk-load", SEARCH_TRIGGERS + ".chunk-load");
+        changed |= move(configuration, V9_CONDITIONS + ".scan-on-farmer-purchase",
+                SEARCH_TRIGGERS + ".new-farmer");
+        changed |= move(configuration, V9_CONDITIONS + ".scan-on-player-join", SEARCH_TRIGGERS + ".player-join");
+        changed |= move(configuration, V9_CONDITIONS + ".scan-on-player-chunk-load",
+                SEARCH_TRIGGERS + ".player-sees-chunk");
+        changed |= move(configuration, V9_CONDITIONS + ".farmer-regions-only",
+                SEARCH_TRIGGERS + ".farmer-areas-only");
+        changed |= move(configuration, V9_TRACKING + ".purchase-radius-chunks",
+                SCAN_RADIUS + ".new-farmer-radius-chunks");
+        changed |= move(configuration, V9_TRACKING + ".bootstrap-radius-chunks",
+                SCAN_RADIUS + ".player-radius-chunks");
+        changed |= move(configuration, V9_TRACKING + ".reconcile-interval-ticks", REPEAT_SEARCH + ".every-ticks");
+        changed |= move(configuration, V9_TRACKING + ".max-chunks-per-cycle", REPEAT_SEARCH + ".chunks-per-run");
+        changed |= move(configuration, V9_TRACKING + ".max-tracked-chunks", SEARCH_LIMITS + ".remembered-chunks");
+        changed |= move(configuration, V9_TRACKING + ".max-concurrent-scans", SEARCH_LIMITS + ".scans-at-once");
+        changed |= move(configuration, V9_TRACKING + ".max-snapshot-captures-per-tick",
+                SEARCH_LIMITS + ".snapshots-per-tick");
+        changed |= move(configuration, V9_TRACKING + ".max-scan-starts-per-second",
+                SEARCH_LIMITS + ".new-scans-per-second");
+        changed |= move(configuration, V9_TRACKING + ".max-sections-per-second",
+                SEARCH_LIMITS + ".sections-per-second");
+        changed |= move(configuration, V9_TRACKING + ".max-block-checks-per-slice",
+                SEARCH_LIMITS + ".blocks-per-async-task");
+        changed |= move(configuration, V9_TRACKING + ".max-pending-scans", SEARCH_LIMITS + ".waiting-scans");
+        changed |= move(configuration, V9_TRACKING + ".max-candidates-per-scan",
+                SEARCH_LIMITS + ".crops-found-per-scan");
+        changed |= move(configuration, V9_TRACKING + ".max-candidate-admissions-per-tick",
+                SEARCH_LIMITS + ".crops-queued-per-tick");
+
+        changed |= move(configuration, V9_BACKPRESSURE + ".enable", LOAD_PROTECTION + ".enable");
+        changed |= move(configuration, V9_BACKPRESSURE + ".slowdown-above-mspt",
+                LOAD_PROTECTION + ".slow-down-at-mspt");
+        changed |= move(configuration, V9_BACKPRESSURE + ".pause-above-mspt",
+                LOAD_PROTECTION + ".stop-at-mspt");
+        changed |= move(configuration, V9_BACKPRESSURE + ".resume-below-mspt",
+                LOAD_PROTECTION + ".resume-below-mspt");
+        changed |= move(configuration, V9_BACKPRESSURE + ".minimum-work-percent",
+                LOAD_PROTECTION + ".minimum-speed-percent");
+        changed |= move(configuration, V9_BACKPRESSURE + ".check-interval-ticks",
+                LOAD_PROTECTION + ".check-every-ticks");
+        changed |= move(configuration, V9_BACKPRESSURE + ".pause-above-region-task-delay-millis",
+                LOAD_PROTECTION + ".region-delay-limit-millis");
+        changed |= move(configuration, V9_BACKPRESSURE + ".region-cooldown-ticks",
+                LOAD_PROTECTION + ".region-recovery-ticks");
+
+        changed |= move(configuration, V9_QUEUE + ".initial-delay-ticks",
+                HARVEST_QUEUE + ".first-run-delay-ticks");
+        changed |= move(configuration, V9_QUEUE + ".continuation-delay-ticks",
+                HARVEST_QUEUE + ".next-run-delay-ticks");
+        changed |= move(configuration, V9_QUEUE + ".max-jobs-per-run", HARVEST_QUEUE + ".harvests-per-run");
+        changed |= move(configuration, V9_QUEUE + ".max-scheduler-submissions-per-tick",
+                HARVEST_QUEUE + ".region-runs-per-tick");
+        changed |= move(configuration, V9_QUEUE + ".max-pending-jobs", HARVEST_QUEUE + ".waiting-harvests");
+        changed |= move(configuration, V9_QUEUE + ".coalesce-duplicates",
+                HARVEST_QUEUE + ".merge-duplicate-blocks");
+        changed |= move(configuration, V9_TELEMETRY + ".enable", LOGGING + ".enable");
+        changed |= move(configuration, V9_TELEMETRY + ".log-interval-seconds", LOGGING + ".interval-seconds");
+
+        changed |= removeIfEmpty(configuration, V9_HARVEST_DELAY);
+        changed |= removeIfEmpty(configuration, V9_HARVEST_PAUSE);
+        changed |= removeIfEmpty(configuration, V9_HARVEST);
+        changed |= removeIfEmpty(configuration, V9_CONDITIONS);
+        changed |= removeIfEmpty(configuration, V9_TRACKING);
+        changed |= removeIfEmpty(configuration, V9_BACKPRESSURE);
+        changed |= removeIfEmpty(configuration, V9_QUEUE);
+        changed |= removeIfEmpty(configuration, V9_TELEMETRY);
+        return changed;
+    }
+
+    private static boolean normalizeFriendlyOptionNames(YamlConfiguration configuration) {
+        boolean changed = normalizeOption(configuration, HARVEST + ".separate-speed-for",
+                "OWNER", "PLAYER", "REGION", "LAND");
+        changed |= normalizeOption(configuration, CROP_SEARCH + ".mode",
+                "EVENT_DRIVEN", "EVENTS", "PERIODIC_LOADED_CHUNKS", "TIMER", "HYBRID", "BOTH");
+        return changed;
+    }
+
+    private static boolean normalizeOption(YamlConfiguration configuration, String path, String... replacements) {
+        Object raw = configuration.get(path);
+        if (!(raw instanceof String value)) {
+            return false;
+        }
+        for (int index = 0; index < replacements.length; index += 2) {
+            if (replacements[index].equalsIgnoreCase(value.trim())) {
+                configuration.set(path, replacements[index + 1]);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean move(YamlConfiguration configuration, String source, String target) {
+        if (!configuration.contains(source)) {
+            return false;
+        }
+        copyIfMissing(configuration, source, target);
+        configuration.set(source, null);
+        return true;
+    }
+
+    private static boolean removeIfEmpty(YamlConfiguration configuration, String path) {
+        var section = configuration.getConfigurationSection(path);
+        if (section == null || !section.getKeys(false).isEmpty()) {
+            return false;
+        }
+        configuration.set(path, null);
+        return true;
+    }
+
+    private static boolean addMissingComments(
+            YamlConfiguration configuration,
+            YamlConfiguration defaults,
+            String root
+    ) {
+        var defaultsSection = defaults.getConfigurationSection(root);
+        if (defaultsSection == null) {
+            return false;
+        }
+        boolean changed = copyCommentsIfMissing(configuration, defaults, root);
+        for (String relative : defaultsSection.getKeys(true)) {
+            changed |= copyCommentsIfMissing(configuration, defaults, root + '.' + relative);
+        }
+        return changed;
+    }
+
+    private static boolean copyCommentsIfMissing(
+            YamlConfiguration configuration,
+            YamlConfiguration defaults,
+            String path
+    ) {
+        List<String> comments = defaults.getComments(path);
+        if (comments.isEmpty() || !configuration.getComments(path).isEmpty()) {
+            return false;
+        }
+        configuration.setComments(path, comments);
+        return true;
     }
 
     private static void copyIfMissing(YamlConfiguration configuration, String source, String target) {
@@ -411,66 +583,66 @@ public final class ConfigurationMaintenance {
     private static OptimizationSettings readOptimizationSettings(YamlConfiguration configuration) {
         return new OptimizationSettings(
                 configuration.getBoolean(OPTIMIZE_MODULE + ".enable"),
-                configuration.getInt(QUEUE + ".initial-delay-ticks"),
-                configuration.getInt(QUEUE + ".continuation-delay-ticks"),
-                configuration.getInt(QUEUE + ".max-jobs-per-run"),
-                configuration.getInt(HARVEST_CONTROL + ".global-max-harvests-per-tick"),
-                configuration.getInt(QUEUE + ".max-scheduler-submissions-per-tick"),
-                configuration.getInt(QUEUE + ".max-pending-jobs"),
-                configuration.getBoolean(QUEUE + ".coalesce-duplicates"),
-                HarvestPacingScope.parse(configuration.getString(HARVEST_CONTROL + ".scope")),
-                configuration.getBoolean(PER_HARVEST_DELAY + ".enable"),
-                configuration.getInt(PER_HARVEST_DELAY + ".ticks"),
-                configuration.getBoolean(BATCH_PAUSE + ".enable"),
-                configuration.getInt(BATCH_PAUSE + ".harvests-before-pause"),
-                configuration.getInt(BATCH_PAUSE + ".pause-ticks")
+                configuration.getInt(HARVEST_QUEUE + ".first-run-delay-ticks"),
+                configuration.getInt(HARVEST_QUEUE + ".next-run-delay-ticks"),
+                configuration.getInt(HARVEST_QUEUE + ".harvests-per-run"),
+                configuration.getInt(HARVEST + ".max-harvests-per-tick"),
+                configuration.getInt(HARVEST_QUEUE + ".region-runs-per-tick"),
+                configuration.getInt(HARVEST_QUEUE + ".waiting-harvests"),
+                configuration.getBoolean(HARVEST_QUEUE + ".merge-duplicate-blocks"),
+                HarvestPacingScope.parse(configuration.getString(HARVEST + ".separate-speed-for")),
+                configuration.getBoolean(HARVEST_DELAY + ".enable"),
+                configuration.getInt(HARVEST_DELAY + ".ticks"),
+                configuration.getBoolean(HARVEST_PAUSE + ".enable"),
+                configuration.getInt(HARVEST_PAUSE + ".after-harvests"),
+                configuration.getInt(HARVEST_PAUSE + ".ticks")
         );
     }
 
     private static TrackingSettings readTrackingSettings(YamlConfiguration configuration) {
         return new TrackingSettings(
-                TrackingMode.parse(configuration.getString(TRACKING + ".mode")),
-                configuration.getBoolean(CONDITIONS + ".growth-events"),
-                configuration.getBoolean(CONDITIONS + ".fertilize-events"),
-                configuration.getBoolean(CONDITIONS + ".crop-place-events"),
-                configuration.getBoolean(CONDITIONS + ".scan-on-chunk-load"),
-                configuration.getBoolean(CONDITIONS + ".scan-on-farmer-purchase"),
-                configuration.getBoolean(CONDITIONS + ".scan-on-player-join"),
-                configuration.getBoolean(CONDITIONS + ".scan-on-player-chunk-load"),
-                configuration.getBoolean(CONDITIONS + ".farmer-regions-only"),
-                configuration.getInt(TRACKING + ".reconcile-interval-ticks"),
-                configuration.getInt(TRACKING + ".max-chunks-per-cycle"),
-                configuration.getInt(TRACKING + ".max-tracked-chunks"),
-                configuration.getInt(TRACKING + ".max-concurrent-scans"),
-                configuration.getInt(TRACKING + ".max-snapshot-captures-per-tick"),
-                configuration.getInt(TRACKING + ".max-scan-starts-per-second"),
-                configuration.getInt(TRACKING + ".max-sections-per-second"),
-                configuration.getInt(TRACKING + ".max-block-checks-per-slice"),
-                configuration.getInt(TRACKING + ".max-pending-scans"),
-                configuration.getInt(TRACKING + ".max-candidates-per-scan"),
-                configuration.getInt(TRACKING + ".max-candidate-admissions-per-tick"),
-                configuration.getInt(TRACKING + ".purchase-radius-chunks"),
-                configuration.getInt(TRACKING + ".bootstrap-radius-chunks")
+                TrackingMode.parse(configuration.getString(CROP_SEARCH + ".mode")),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".natural-growth"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".bone-meal"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".crop-placement"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".chunk-load"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".new-farmer"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".player-join"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".player-sees-chunk"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".farmer-areas-only"),
+                configuration.getInt(REPEAT_SEARCH + ".every-ticks"),
+                configuration.getInt(REPEAT_SEARCH + ".chunks-per-run"),
+                configuration.getInt(SEARCH_LIMITS + ".remembered-chunks"),
+                configuration.getInt(SEARCH_LIMITS + ".scans-at-once"),
+                configuration.getInt(SEARCH_LIMITS + ".snapshots-per-tick"),
+                configuration.getInt(SEARCH_LIMITS + ".new-scans-per-second"),
+                configuration.getInt(SEARCH_LIMITS + ".sections-per-second"),
+                configuration.getInt(SEARCH_LIMITS + ".blocks-per-async-task"),
+                configuration.getInt(SEARCH_LIMITS + ".waiting-scans"),
+                configuration.getInt(SEARCH_LIMITS + ".crops-found-per-scan"),
+                configuration.getInt(SEARCH_LIMITS + ".crops-queued-per-tick"),
+                configuration.getInt(SCAN_RADIUS + ".new-farmer-radius-chunks"),
+                configuration.getInt(SCAN_RADIUS + ".player-radius-chunks")
         );
     }
 
     private static BackpressureSettings readBackpressureSettings(YamlConfiguration configuration) {
         return new BackpressureSettings(
-                configuration.getBoolean(BACKPRESSURE + ".enable"),
-                configuration.getDouble(BACKPRESSURE + ".slowdown-above-mspt"),
-                configuration.getDouble(BACKPRESSURE + ".pause-above-mspt"),
-                configuration.getDouble(BACKPRESSURE + ".resume-below-mspt"),
-                configuration.getInt(BACKPRESSURE + ".minimum-work-percent"),
-                configuration.getInt(BACKPRESSURE + ".check-interval-ticks"),
-                configuration.getInt(BACKPRESSURE + ".pause-above-region-task-delay-millis"),
-                configuration.getInt(BACKPRESSURE + ".region-cooldown-ticks")
+                configuration.getBoolean(LOAD_PROTECTION + ".enable"),
+                configuration.getDouble(LOAD_PROTECTION + ".slow-down-at-mspt"),
+                configuration.getDouble(LOAD_PROTECTION + ".stop-at-mspt"),
+                configuration.getDouble(LOAD_PROTECTION + ".resume-below-mspt"),
+                configuration.getInt(LOAD_PROTECTION + ".minimum-speed-percent"),
+                configuration.getInt(LOAD_PROTECTION + ".check-every-ticks"),
+                configuration.getInt(LOAD_PROTECTION + ".region-delay-limit-millis"),
+                configuration.getInt(LOAD_PROTECTION + ".region-recovery-ticks")
         );
     }
 
     private static TelemetrySettings readTelemetrySettings(YamlConfiguration configuration) {
         return new TelemetrySettings(
-                configuration.getBoolean(TELEMETRY + ".enable"),
-                configuration.getInt(TELEMETRY + ".log-interval-seconds")
+                configuration.getBoolean(LOGGING + ".enable"),
+                configuration.getInt(LOGGING + ".interval-seconds")
         );
     }
 
@@ -495,25 +667,20 @@ public final class ConfigurationMaintenance {
         return true;
     }
 
-    private static boolean isTrackingMode(String value) {
-        if (value == null) {
-            return false;
-        }
-        for (TrackingMode mode : TrackingMode.values()) {
-            if (mode.name().equalsIgnoreCase(value.trim())) {
-                return true;
-            }
-        }
-        return false;
+    private static boolean isFriendlyTrackingMode(String value) {
+        return matchesOption(value, "EVENTS", "TIMER", "BOTH");
     }
 
-    private static boolean isHarvestPacingScope(String value) {
-        if (value == null) {
-            return false;
-        }
-        for (HarvestPacingScope scope : HarvestPacingScope.values()) {
-            if (scope.name().equalsIgnoreCase(value.trim())) {
-                return true;
+    private static boolean isFriendlyHarvestScope(String value) {
+        return matchesOption(value, "PLAYER", "FARMER", "LAND", "CHUNK");
+    }
+
+    private static boolean matchesOption(String value, String... allowed) {
+        if (value != null) {
+            for (String option : allowed) {
+                if (option.equalsIgnoreCase(value.trim())) {
+                    return true;
+                }
             }
         }
         return false;
@@ -546,19 +713,21 @@ public final class ConfigurationMaintenance {
     private static YamlConfiguration loadBundled(InputStream input) {
         Objects.requireNonNull(input, "Bundled defaults must be present.");
         try (InputStream stream = input; Reader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
-            return YamlConfiguration.loadConfiguration(reader);
+            YamlConfiguration configuration = commentAwareConfiguration();
+            configuration.load(reader);
+            return configuration;
         }
-        catch (IOException exception) {
+        catch (IOException | InvalidConfigurationException exception) {
             throw new IllegalStateException("Unable to read bundled AutoHarvest defaults.", exception);
         }
     }
 
     private static LoadedYaml loadExisting(File target, Logger logger) throws IOException {
         if (!target.isFile()) {
-            return new LoadedYaml(new YamlConfiguration(), false, false);
+            return new LoadedYaml(commentAwareConfiguration(), false, false);
         }
 
-        YamlConfiguration configuration = new YamlConfiguration();
+        YamlConfiguration configuration = commentAwareConfiguration();
         try {
             configuration.load(target);
             return new LoadedYaml(configuration, true, false);
@@ -567,8 +736,14 @@ public final class ConfigurationMaintenance {
             logger.warning("AutoHarvest found malformed YAML in " + target.getName()
                     + "; the original file will be backed up and repaired: "
                     + compactDiagnostic(exception.getMessage()));
-            return new LoadedYaml(new YamlConfiguration(), true, true);
+            return new LoadedYaml(commentAwareConfiguration(), true, true);
         }
+    }
+
+    private static YamlConfiguration commentAwareConfiguration() {
+        YamlConfiguration configuration = new YamlConfiguration();
+        configuration.options().parseComments(true);
+        return configuration;
     }
 
     private static String compactDiagnostic(String message) {

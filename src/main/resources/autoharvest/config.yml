@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 9
+config-version: 10
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -52,119 +52,121 @@ update-checker:
   request-timeout-seconds: 8
 
 # Optional production tuning. Configured child values are ignored while enable is false.
-# Fixed conservative queue/tracking guards remain active even when this is false.
+# Fixed conservative safety limits remain active even when this is false.
 # Bukkit world access remains on Paper's owning region thread; no world mutation is async.
 optimize-module:
   # Enables every configurable optimization value below.
   enable: false
 
-  # Important harvest speed and optional pause settings.
-  harvest-control:
+  # Main harvest speed settings.
+  harvest:
     # Hard harvest limit shared by every world and Folia region in one server tick.
-    global-max-harvests-per-tick: 32
-    # OWNER, FARMER, REGION or CHUNK. FARMER gives every Farmer/island independent timing.
-    scope: "FARMER"
-    # Optional steady delay between individual harvests in the selected scope.
-    per-harvest-delay:
+    max-harvests-per-tick: 32
+    # PLAYER, FARMER, LAND or CHUNK. FARMER gives every Farmer/island its own speed.
+    separate-speed-for: "FARMER"
+    # Optional steady delay between individual harvests in the selected group.
+    delay-between-harvests:
       # Disabled by default so harvests do not receive an artificial per-block cooldown.
       enable: false
       # Number of ticks between harvests while this delay is enabled (20 ticks ~= 1 second).
       ticks: 2
-    # Optional batch cooldown: harvest N crops, pause this scope, then continue automatically.
-    batch-pause:
-      # Disabled by default; safety budgets and adaptive backpressure still remain active.
+    # Optional batch cooldown: harvest N crops, pause this group, then continue automatically.
+    pause-after-batch:
+      # Disabled by default; queue limits and server load protection remain active.
       enable: false
       # Number of queued harvest attempts allowed before each pause.
-      harvests-before-pause: 64
+      after-harvests: 64
       # Duration of each pause in ticks (20 ticks ~= 1 second).
-      pause-ticks: 20
+      ticks: 20
 
-  # Crop discovery mode and the signals allowed to request bounded scans.
-  tracking:
-    # EVENT_DRIVEN, PERIODIC_LOADED_CHUNKS or HYBRID.
-    mode: "EVENT_DRIVEN"
-    conditions:
+  # Controls when and how loaded chunks are searched for mature crops.
+  crop-search:
+    # EVENTS checks crop changes, TIMER checks known chunks periodically, BOTH enables both.
+    mode: "EVENTS"
+    triggers:
       # Tracks crops when their natural growth event reaches maturity.
-      growth-events: true
+      natural-growth: true
       # Tracks crops changed by bone meal or another fertilization event.
-      fertilize-events: true
+      bone-meal: true
       # Tracks supported crop blocks when a player places them.
-      crop-place-events: true
-      # Scans every loaded chunk signal; keep disabled on very large servers.
-      scan-on-chunk-load: false
-      # Scans the loaded Farmer area immediately after a Farmer is purchased.
-      scan-on-farmer-purchase: true
-      # Scans nearby loaded chunks when an online player is bootstrapped after enable/reload.
-      scan-on-player-join: true
-      # Rechecks a chunk when Paper sends it to a player, resuming farms after returning.
-      scan-on-player-chunk-load: true
-      # Rejects event/bootstrap tracking outside active Farmer areas unless withoutFarmer is true.
-      farmer-regions-only: true
-    # Advanced scan limits below normally do not need changing.
-    # EVENT_DRIVEN revisits known crop chunks; periodic modes rotate known loaded chunks.
-    reconcile-interval-ticks: 200
-    # Chunks added back to the bounded scan queue per reconciliation.
-    max-chunks-per-cycle: 2
-    # Memory bound for crop-bearing or known loaded chunks.
-    max-tracked-chunks: 8192
-    # Maximum snapshots retained and analyzed concurrently.
-    max-concurrent-scans: 1
-    # Region-thread snapshot capture submissions allowed per tick.
-    max-snapshot-captures-per-tick: 1
-    # New chunk snapshots allowed per second.
-    max-scan-starts-per-second: 4
-    # Global scan budget in 4096-block chunk sections per second.
-    max-sections-per-second: 32
-    # Maximum primary block reads in one asynchronous slice.
-    max-block-checks-per-slice: 8192
-    # Bound for coalesced chunk scan requests.
-    max-pending-scans: 4096
-    # Maximum mature crop candidates returned by one snapshot scan.
-    max-candidates-per-scan: 512
-    # Farmer scope lookups and queue admissions performed by one region task/tick.
-    max-candidate-admissions-per-tick: 32
-    # Loaded chunk radius reconciled immediately after a Farmer is purchased.
-    purchase-radius-chunks: 8
-    # Loaded chunk radius reconciled for online players after enable/reload.
-    bootstrap-radius-chunks: 3
+      crop-placement: true
+      # Scans every server chunk-load signal; keep disabled on very large servers.
+      chunk-load: false
+      # Scans the visible Farmer area immediately after a new Farmer is purchased.
+      new-farmer: true
+      # Scans nearby visible chunks when a player joins or the module reloads.
+      player-join: true
+      # Rechecks a chunk when it becomes visible to a player after movement.
+      player-sees-chunk: true
+      # Rejects search triggers outside active Farmer areas unless withoutFarmer is true.
+      farmer-areas-only: true
+    scan-radius:
+      # Visible chunk radius searched after a new Farmer is purchased.
+      new-farmer-radius-chunks: 8
+      # Visible chunk radius searched around players on join, reload and movement.
+      player-radius-chunks: 3
+    repeat-search:
+      # Ticks between bounded checks of chunks already known to contain crops.
+      every-ticks: 200
+      # Number of known chunks returned to the scan queue each repeat.
+      chunks-per-run: 2
+    # Advanced search limits below normally do not need changing.
+    limits:
+      # Maximum crop-bearing or loaded chunks remembered in memory.
+      remembered-chunks: 8192
+      # Maximum chunk scans kept active at the same time.
+      scans-at-once: 1
+      # Maximum region-thread chunk snapshots requested in one tick.
+      snapshots-per-tick: 1
+      # Maximum new chunk scans started per second.
+      new-scans-per-second: 4
+      # Maximum 4096-block chunk sections checked per second.
+      sections-per-second: 32
+      # Maximum block reads performed by one asynchronous task.
+      blocks-per-async-task: 8192
+      # Maximum unique chunk scan requests waiting in memory.
+      waiting-scans: 4096
+      # Maximum mature crops returned by one chunk scan.
+      crops-found-per-scan: 512
+      # Maximum discovered crops added to harvest queues in one region tick.
+      crops-queued-per-tick: 32
 
   # Automatically reduces or pauses work when server/region tick health degrades.
-  adaptive-backpressure:
+  server-load-protection:
     # Enables load-aware scaling independently from optional harvest batch pauses.
     enable: true
     # Starts gradually reducing work above this rolling server MSPT.
-    slowdown-above-mspt: 35.0
+    slow-down-at-mspt: 35.0
     # Temporarily stops new work above this rolling server MSPT.
-    pause-above-mspt: 45.0
+    stop-at-mspt: 45.0
     # Resumes MSPT-paused work only after the server falls below this value.
     resume-below-mspt: 40.0
-    # Lowest budget percentage used between slowdown and pause thresholds.
-    minimum-work-percent: 10
+    # Lowest work percentage used while the server is slowing down.
+    minimum-speed-percent: 10
     # Number of ticks between rolling MSPT evaluations.
-    check-interval-ticks: 20
+    check-every-ticks: 20
     # Folia/Leaf safeguard threshold for an unusually late region callback.
-    pause-above-region-task-delay-millis: 100
+    region-delay-limit-millis: 100
     # Number of ticks that the affected region remains cooled down after a late callback.
-    region-cooldown-ticks: 100
+    region-recovery-ticks: 100
 
-  # Advanced bounded-queue limits. Change these only after measuring production load.
-  queue:
-    # Delay before the first queued harvest in a newly active chunk.
-    initial-delay-ticks: 2
-    # Minimum yield between later region runs from the same non-empty chunk queue.
-    continuation-delay-ticks: 1
-    # Maximum validated harvest attempts processed by one chunk/region run.
-    max-jobs-per-run: 8
-    # Maximum region batches submitted by the global dispatcher in one tick.
-    max-scheduler-submissions-per-tick: 8
-    # Global in-memory queue bound; overflow remains live and is reconciled later.
-    max-pending-jobs: 8192
-    # Merges repeated growth signals for a block while its harvest job is pending.
-    coalesce-duplicates: true
-
-  # Low-frequency operational counters for production diagnosis.
-  telemetry:
-    # Emits counters only while useful work, deferrals or failures exist.
-    enable: true
-    # Minimum number of seconds between telemetry log lines.
-    log-interval-seconds: 300
+  # Low-level safety limits. Change these only after measuring production load.
+  advanced:
+    harvest-queue:
+      # Delay before the first queued harvest in a newly active chunk.
+      first-run-delay-ticks: 2
+      # Minimum yield between later region runs from the same non-empty chunk queue.
+      next-run-delay-ticks: 1
+      # Maximum validated harvest attempts processed by one chunk/region run.
+      harvests-per-run: 8
+      # Maximum region runs submitted by the global dispatcher in one tick.
+      region-runs-per-tick: 8
+      # Maximum harvest jobs waiting in memory; overflow is searched again later.
+      waiting-harvests: 8192
+      # Merges repeated growth signals for a block while its harvest job is pending.
+      merge-duplicate-blocks: true
+    logging:
+      # Emits low-frequency counters only while useful work or failures exist.
+      enable: true
+      # Minimum number of seconds between diagnostic log lines.
+      interval-seconds: 300
