@@ -14,33 +14,31 @@ public final class FarmerRegionAccess {
     }
 
     public static String resolveRegionId(@NotNull Location location) {
+        var integration = Main.getIntegration();
         try {
-            String regionId = Main.getIntegration().getRegionID(location);
+            String regionId = integration.getRegionID(location);
             return regionId == null || regionId.isBlank() ? null : regionId;
         }
         catch (NullPointerException exception) {
             // Farmer v6-b117 dereferences SuperiorSkyblock's null island result.
-            // No island at this location is a normal negative lookup, not a fault.
-            if (isMissingSuperiorIsland(exception)) {
+            // HotSpot may omit both message and stack trace after repeated throws,
+            // so the active integration class is the only durable discriminator.
+            if (isSuperiorIntegration(integration)) {
                 return null;
             }
             throw exception;
         }
     }
 
-    static boolean isMissingSuperiorIsland(Throwable exception) {
-        String message = exception.getMessage();
-        boolean missingIslandMessage = message == null
-                || (message.contains("SuperiorSkyblockAPI.getIslandAt") && message.contains("getUniqueId()"));
-        if (!missingIslandMessage) {
-            return false;
-        }
-        for (StackTraceElement frame : exception.getStackTrace()) {
-            if (SUPERIOR_INTEGRATION.equals(frame.getClassName())
-                    && "getRegionID".equals(frame.getMethodName())) {
-                return true;
-            }
-        }
-        return false;
+    public static boolean isSuperiorIntegrationActive() {
+        return isSuperiorIntegration(Main.getIntegration());
+    }
+
+    static boolean isSuperiorIntegration(Object integration) {
+        return integration != null && isSuperiorIntegrationName(integration.getClass().getName());
+    }
+
+    static boolean isSuperiorIntegrationName(String className) {
+        return SUPERIOR_INTEGRATION.equals(className);
     }
 }

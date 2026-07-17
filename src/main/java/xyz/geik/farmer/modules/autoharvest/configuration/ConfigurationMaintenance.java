@@ -47,6 +47,7 @@ public final class ConfigurationMaintenance {
     private static final String SEARCH_TRIGGERS = CROP_SEARCH + ".triggers";
     private static final String SCAN_RADIUS = CROP_SEARCH + ".scan-radius";
     private static final String REPEAT_SEARCH = CROP_SEARCH + ".repeat-search";
+    private static final String CROP_PRIORITY = CROP_SEARCH + ".priority";
     private static final String SEARCH_LIMITS = CROP_SEARCH + ".limits";
     private static final String LOAD_PROTECTION = OPTIMIZE_MODULE + ".server-load-protection";
     private static final String ADVANCED = OPTIMIZE_MODULE + ".advanced";
@@ -133,7 +134,7 @@ public final class ConfigurationMaintenance {
         changed |= migrateV9OptimizationPaths(configuration);
         changed |= migrateV10Logging(configuration);
         changed |= normalizeFriendlyOptionNames(configuration);
-        changed |= repairInteger(configuration, defaults, "config-version", 11, 11);
+        changed |= repairInteger(configuration, defaults, "config-version", 12, 12);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
@@ -161,6 +162,7 @@ public final class ConfigurationMaintenance {
         changed |= ensureSection(configuration, SEARCH_TRIGGERS);
         changed |= ensureSection(configuration, SCAN_RADIUS);
         changed |= ensureSection(configuration, REPEAT_SEARCH);
+        changed |= ensureSection(configuration, CROP_PRIORITY);
         changed |= ensureSection(configuration, SEARCH_LIMITS);
         changed |= ensureSection(configuration, LOAD_PROTECTION);
         changed |= ensureSection(configuration, ADVANCED);
@@ -185,11 +187,15 @@ public final class ConfigurationMaintenance {
         changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".new-farmer");
         changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".player-join");
         changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".player-sees-chunk");
+        changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".entire-loaded-farmer-area");
         changed |= repairBoolean(configuration, defaults, SEARCH_TRIGGERS + ".farmer-areas-only");
         changed |= repairInteger(configuration, defaults, SCAN_RADIUS + ".new-farmer-radius-chunks", 1, 32);
         changed |= repairInteger(configuration, defaults, SCAN_RADIUS + ".player-radius-chunks", 1, 16);
         changed |= repairInteger(configuration, defaults, REPEAT_SEARCH + ".every-ticks", 20, 72_000);
         changed |= repairInteger(configuration, defaults, REPEAT_SEARCH + ".chunks-per-run", 1, 32);
+        changed |= repairBoolean(configuration, defaults, CROP_PRIORITY + ".enable");
+        changed |= repairInteger(configuration, defaults,
+                CROP_PRIORITY + ".prioritized-scans-before-normal", 1, 16);
         changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".remembered-chunks", 64, 32_768);
         changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".scans-at-once", 1, 4);
         changed |= repairInteger(configuration, defaults, SEARCH_LIMITS + ".snapshots-per-tick", 1, 4);
@@ -628,7 +634,10 @@ public final class ConfigurationMaintenance {
                 configuration.getBoolean(SEARCH_TRIGGERS + ".new-farmer"),
                 configuration.getBoolean(SEARCH_TRIGGERS + ".player-join"),
                 configuration.getBoolean(SEARCH_TRIGGERS + ".player-sees-chunk"),
+                configuration.getBoolean(SEARCH_TRIGGERS + ".entire-loaded-farmer-area"),
                 configuration.getBoolean(SEARCH_TRIGGERS + ".farmer-areas-only"),
+                configuration.getBoolean(CROP_PRIORITY + ".enable"),
+                configuration.getInt(CROP_PRIORITY + ".prioritized-scans-before-normal"),
                 configuration.getInt(REPEAT_SEARCH + ".every-ticks"),
                 configuration.getInt(REPEAT_SEARCH + ".chunks-per-run"),
                 configuration.getInt(SEARCH_LIMITS + ".remembered-chunks"),

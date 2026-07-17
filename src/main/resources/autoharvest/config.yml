@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 11
+config-version: 12
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -110,6 +110,8 @@ optimize-module:
       player-join: true
       # Rechecks a chunk when it becomes visible to a player after movement.
       player-sees-chunk: true
+      # Discovers every currently loaded chunk of a player's Farmer island on join/reload/purchase.
+      entire-loaded-farmer-area: true
       # Rejects search triggers outside active Farmer areas unless withoutFarmer is true.
       farmer-areas-only: true
     scan-radius:
@@ -122,6 +124,11 @@ optimize-module:
       every-ticks: 200
       # Number of known chunks returned to the scan queue each repeat.
       chunks-per-run: 2
+    priority:
+      # Gives chunks with more mature crops earlier scans without starving normal discovery.
+      enable: true
+      # Forces one normal discovery scan after this many prioritized crop scans.
+      prioritized-scans-before-normal: 3
     # Advanced search limits below normally do not need changing.
     limits:
       # Maximum crop-bearing or loaded chunks remembered in memory.

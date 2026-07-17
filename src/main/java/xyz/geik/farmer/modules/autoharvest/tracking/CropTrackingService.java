@@ -27,6 +27,7 @@ import xyz.geik.farmer.model.Farmer;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
 import xyz.geik.farmer.modules.autoharvest.compat.FarmerAccess;
 import xyz.geik.farmer.modules.autoharvest.compat.FarmerRegionAccess;
+import xyz.geik.farmer.modules.autoharvest.compat.SuperiorFarmerAreaAccess;
 import xyz.geik.farmer.modules.autoharvest.configuration.BackpressureSettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 import xyz.geik.farmer.modules.autoharvest.configuration.TrackingSettings;
@@ -37,7 +38,6 @@ import xyz.geik.glib.shades.xseries.XMaterial;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -61,12 +61,11 @@ public final class CropTrackingService implements Listener {
     private final ConcurrentLinkedQueue<TrackedChunk> trackedOrder = new ConcurrentLinkedQueue<>();
     private final ConcurrentHashMap<ChunkKey, Long> loadedChunks = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<TrackedChunk> loadedOrder = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<ChunkKey> scanQueue = new ConcurrentLinkedQueue<>();
+    private final FairScanQueue<ChunkKey> scanQueue = new FairScanQueue<>();
     private final ConcurrentLinkedQueue<ScanWork> sliceQueue = new ConcurrentLinkedQueue<>();
-    private final Set<ChunkKey> pendingScans = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<ChunkKey, Integer> cropPressure = new ConcurrentHashMap<>();
     private final BoundedRememberedSet<ChunkKey> dormantChunks = new BoundedRememberedSet<>();
     private final BoundedRememberedSet<ChunkKey> denseChunks = new BoundedRememberedSet<>();
-    private final AtomicInteger pendingScanCount = new AtomicInteger();
     private final AtomicInteger activeScans = new AtomicInteger();
     private final AtomicInteger blockPermits = new AtomicInteger();
     private final AtomicInteger trackedOrderEntries = new AtomicInteger();
@@ -137,10 +136,9 @@ public final class CropTrackingService implements Listener {
         loadedOrder.clear();
         scanQueue.clear();
         sliceQueue.clear();
-        pendingScans.clear();
+        cropPressure.clear();
         dormantChunks.clear();
         denseChunks.clear();
-        pendingScanCount.set(0);
         activeScans.set(0);
         blockPermits.set(0);
         trackedOrderEntries.set(0);
@@ -164,8 +162,17 @@ public final class CropTrackingService implements Listener {
         if (current.reconcilesLoadedChunks() && !current.farmerRegionsOnly()) {
             trackLoaded(event.getChunk());
         }
-        if (current.scanOnChunkLoad() && (!current.farmerRegionsOnly() || module.isWithoutFarmer())) {
-            requestScan(event.getWorld(), event.getChunk().getX(), event.getChunk().getZ(), true);
+        if (current.scanOnChunkLoad()) {
+            Location center = chunkCenter(event.getChunk());
+            if (!current.farmerRegionsOnly() || module.isWithoutFarmer() || hasEnabledFarmer(center)) {
+                if (current.reconcilesLoadedChunks()) {
+                    trackLoaded(key);
+                }
+                else {
+                    track(key);
+                }
+                requestScan(event.getWorld(), event.getChunk().getX(), event.getChunk().getZ(), true);
+            }
         }
     }
 
@@ -175,6 +182,7 @@ public final class CropTrackingService implements Listener {
         boolean known = untrack(key);
         known |= loadedChunks.remove(key) != null;
         denseChunks.take(key);
+        cropPressure.remove(key);
         if (known) {
             dormantChunks.remember(key, settings.maxTrackedChunks());
         }
@@ -197,11 +205,14 @@ public final class CropTrackingService implements Listener {
         }
         if (!WorldHelper.isFarmerAllowed(chunk.getWorld().getName())
                 || (current.farmerRegionsOnly() && !module.isWithoutFarmer()
-                && !hasEnabledFarmer(playerLocation))) {
+                && !hasEnabledFarmer(chunkCenter(chunk)))) {
             return;
         }
         if (current.reconcilesLoadedChunks()) {
             trackLoaded(chunk);
+        }
+        else {
+            track(chunk);
         }
         requestScan(chunk.getWorld(), chunk.getX(), chunk.getZ(), true);
     }
@@ -270,6 +281,7 @@ public final class CropTrackingService implements Listener {
         }
         ChunkKey key = new ChunkKey(world.getUID(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
         track(key);
+        cropPressure.merge(key, settings.maxCandidatesPerScan(), Math::max);
         requestScan(world, key.chunkX(), key.chunkZ(), true);
     }
 
@@ -280,6 +292,9 @@ public final class CropTrackingService implements Listener {
         Location center = player.getLocation();
         World world = center.getWorld();
         TrackingSettings current = settings;
+        if (current.scanEntireLoadedFarmerArea() && queueLoadedFarmerArea(player, current)) {
+            return;
+        }
         if (!WorldHelper.isFarmerAllowed(world.getName())
                 || (current.farmerRegionsOnly() && !farmerScoped
                 && !module.isWithoutFarmer() && !hasEnabledFarmer(center))) {
@@ -307,6 +322,64 @@ public final class CropTrackingService implements Listener {
             }
             requestScan(world, chunk.x(), chunk.z(), true);
         }
+    }
+
+    private boolean queueLoadedFarmerArea(Player player, TrackingSettings current) {
+        try {
+            var loadedArea = SuperiorFarmerAreaAccess.findLoadedArea(player.getUniqueId());
+            if (loadedArea.isEmpty()) {
+                return false;
+            }
+            SuperiorFarmerAreaAccess.LoadedFarmerArea area = loadedArea.get();
+            Farmer farmer = FarmerAccess.findByRegionId(area.regionId());
+            if (farmer == null) {
+                return false;
+            }
+            synchronized (farmer) {
+                if (!farmer.getAttributeStatus("autoharvest")) {
+                    return false;
+                }
+            }
+
+            Location playerLocation = player.getLocation();
+            List<Chunk> chunks = new ArrayList<>(area.chunks());
+            chunks.sort(Comparator.comparingInt(chunk -> chunkDistance(chunk, playerLocation)));
+            int accepted = 0;
+            for (Chunk chunk : chunks) {
+                if (accepted >= current.maxTrackedChunks()) {
+                    break;
+                }
+                if (!WorldHelper.isFarmerAllowed(chunk.getWorld().getName())) {
+                    continue;
+                }
+                ChunkKey key = new ChunkKey(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ());
+                if (current.reconcilesLoadedChunks()) {
+                    trackLoaded(key);
+                }
+                else {
+                    track(key);
+                }
+                requestScan(chunk.getWorld(), chunk.getX(), chunk.getZ(), true);
+                accepted++;
+            }
+            return accepted > 0;
+        }
+        catch (RuntimeException exception) {
+            logFailure("could not enumerate a loaded Farmer area", exception);
+            return false;
+        }
+    }
+
+    private int chunkDistance(Chunk chunk, Location location) {
+        if (location.getWorld() != chunk.getWorld()) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(Math.abs(chunk.getX() - (location.getBlockX() >> 4)),
+                Math.abs(chunk.getZ() - (location.getBlockZ() >> 4)));
+    }
+
+    private Location chunkCenter(Chunk chunk) {
+        return new Location(chunk.getWorld(), (chunk.getX() << 4) + 8, 0, (chunk.getZ() << 4) + 8);
     }
 
     private void schedulePlayerScan(Player player, int radius, boolean farmerScoped) {
@@ -384,16 +457,13 @@ public final class CropTrackingService implements Listener {
         while (captures < captureLimit
                 && activeScans.get() < current.maxConcurrentScans()
                 && scanStartsInWindow < startLimit) {
-            ChunkKey key = scanQueue.poll();
+            ChunkKey key = scanQueue.poll(current.prioritizedScansBeforeNormal());
             if (key == null) {
                 return;
             }
-            if (!pendingScans.contains(key)) {
-                continue;
-            }
             World world = Bukkit.getWorld(key.worldId());
             if (world == null || !module.isActiveGeneration(generation)) {
-                releasePending(key);
+                scanQueue.complete(key);
                 continue;
             }
             activeScans.incrementAndGet();
@@ -417,7 +487,7 @@ public final class CropTrackingService implements Listener {
 
     private void captureSnapshot(World world, ChunkKey key, TrackingSettings current, long generation) {
         if (!running || !module.isActiveGeneration(generation)
-                || !pendingScans.contains(key) || !world.isChunkLoaded(key.chunkX(), key.chunkZ())) {
+                || !scanQueue.contains(key) || !world.isChunkLoaded(key.chunkX(), key.chunkZ())) {
             finishScan(key);
             return;
         }
@@ -465,7 +535,7 @@ public final class CropTrackingService implements Listener {
 
     private void scanSlice(ScanWork work, int granted, TrackingSettings current, long generation) {
         try {
-            if (!running || !module.isActiveGeneration(generation) || !pendingScans.contains(work.key())) {
+            if (!running || !module.isActiveGeneration(generation) || !scanQueue.contains(work.key())) {
                 finishScan(work.key());
                 return;
             }
@@ -497,6 +567,14 @@ public final class CropTrackingService implements Listener {
             TrackingSettings current,
             long generation
     ) {
+        if (result.candidates().isEmpty()) {
+            cropPressure.remove(work.key());
+        }
+        else {
+            int pressure = result.candidateLimitReached()
+                    ? current.maxCandidatesPerScan() : result.candidates().size();
+            cropPressure.put(work.key(), pressure);
+        }
         if (result.containsCrop() && !current.reconcilesLoadedChunks()) {
             track(work.key());
         }
@@ -595,6 +673,7 @@ public final class CropTrackingService implements Listener {
         }
         World world = Bukkit.getWorld(worldId);
         if (world != null) {
+            cropPressure.put(key, settings.maxCandidatesPerScan());
             requestScan(world, chunkX, chunkZ, true);
         }
     }
@@ -604,20 +683,15 @@ public final class CropTrackingService implements Listener {
             return;
         }
         ChunkKey key = new ChunkKey(world.getUID(), chunkX, chunkZ);
-        if (pendingScans.contains(key) || !reservePending(settings.maxPendingScans())) {
-            if (!pendingScans.contains(key)) {
-                droppedScanRequests.increment();
-            }
+        int pressure = settings.cropPriorityEnabled() ? cropPressure.getOrDefault(key, 0) : 0;
+        FairScanQueue.OfferResult result = scanQueue.offer(key, pressure, settings.maxPendingScans());
+        if (result == FairScanQueue.OfferResult.FULL) {
+            droppedScanRequests.increment();
             return;
         }
-        if (pendingScans.add(key)) {
-            scanQueue.offer(key);
-            if (wake) {
-                scheduleTick(1L);
-            }
-        }
-        else {
-            pendingScanCount.decrementAndGet();
+        if (wake && (result == FairScanQueue.OfferResult.ENQUEUED
+                || result == FairScanQueue.OfferResult.PROMOTED)) {
+            scheduleTick(1L);
         }
     }
 
@@ -687,7 +761,12 @@ public final class CropTrackingService implements Listener {
                 return false;
             }
             Farmer farmer = FarmerAccess.findByRegionId(regionId);
-            return farmer != null && farmer.getAttributeStatus("autoharvest");
+            if (farmer == null) {
+                return false;
+            }
+            synchronized (farmer) {
+                return farmer.getAttributeStatus("autoharvest");
+            }
         }
         catch (RuntimeException exception) {
             logFailure("could not validate a Farmer tracking scope", exception);
@@ -696,22 +775,10 @@ public final class CropTrackingService implements Listener {
     }
 
     private void finishScan(ChunkKey key) {
-        releasePending(key);
+        scanQueue.complete(key);
         activeScans.updateAndGet(value -> Math.max(0, value - 1));
         if (running) {
             scheduleTick(1L);
-        }
-    }
-
-    private boolean reservePending(int limit) {
-        while (true) {
-            int current = pendingScanCount.get();
-            if (current >= limit) {
-                return false;
-            }
-            if (pendingScanCount.compareAndSet(current, current + 1)) {
-                return true;
-            }
         }
     }
 
@@ -728,22 +795,16 @@ public final class CropTrackingService implements Listener {
         }
     }
 
-    private void releasePending(ChunkKey key) {
-        if (pendingScans.remove(key)) {
-            pendingScanCount.updateAndGet(value -> Math.max(0, value - 1));
-        }
-    }
-
     private void scheduleNextTick(TrackingSettings current, long now, int workPercent) {
         int startLimit = AdaptiveBackpressure.scaleLimit(current.maxScanStartsPerSecond(), workPercent);
-        boolean immediate = (!scanQueue.isEmpty() && activeScans.get() < current.maxConcurrentScans()
+        boolean immediate = (scanQueue.hasQueued() && activeScans.get() < current.maxConcurrentScans()
                 && scanStartsInWindow < startLimit)
                 || (!sliceQueue.isEmpty() && blockPermits.get() > 0);
         if (immediate && !backpressure.isPaused()) {
             scheduleTick(1L);
             return;
         }
-        boolean waiting = !scanQueue.isEmpty() || !sliceQueue.isEmpty();
+        boolean waiting = scanQueue.hasQueued() || !sliceQueue.isEmpty();
         long target = nextReconcileNanos;
         if (waiting) {
             target = Math.min(target, budgetWindowNanos + SECOND_NANOS);
@@ -810,9 +871,10 @@ public final class CropTrackingService implements Listener {
             return;
         }
         nextTelemetryNanos = now + current.logIntervalSeconds() * SECOND_NANOS;
-        if (pendingScanCount.get() > 0 || droppedScanRequests.sum() > 0) {
+        if (scanQueue.size() > 0 || droppedScanRequests.sum() > 0) {
             module.logDebug("AutoHarvest tracking: mode=" + settings.mode()
-                    + ", pending=" + pendingScanCount.get() + ", active=" + activeScans.get()
+                    + ", pending=" + scanQueue.size() + ", active=" + activeScans.get()
+                    + ", priority-pending=" + scanQueue.prioritizedSize()
                     + ", tracked=" + trackedChunks.size() + ", loaded=" + loadedChunks.size()
                     + ", dormant=" + dormantChunks.size() + ", dense=" + denseChunks.size()
                     + ", completed=" + completedScans.sum() + ", blocks=" + scannedBlocks.sum()

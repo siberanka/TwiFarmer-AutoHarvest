@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.7.1.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.8.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -24,7 +24,7 @@ Crop block discovery uses an explicit modern-material table. Legacy Bukkit const
 
 Farmer cache access is linked through a one-time MethodHandle adapter. This preserves compatibility with both the `HashMap` return descriptor used by Farmer v6-b113 and the `Map` descriptor used by v6-b117 and newer without reflection in the per-block lookup path.
 
-Farmer v6-b117's SuperiorSkyblock integration can throw when a scanned location is outside every island. AutoHarvest recognizes only that integration's known null-island stack signature as a normal negative lookup. Crops outside a Farmer area are denied without console spam, while unrelated integration faults remain visible in the bounded error log.
+Farmer v6-b117's SuperiorSkyblock integration can throw when a scanned location is outside every island. AutoHarvest identifies that active integration even after HotSpot omits repeated exception stack traces, treats a missing island as a normal negative lookup, and avoids owner lookups for Farmer- and land-scoped harvest pacing. Crops outside a Farmer area are denied without console spam, while unrelated integration faults remain visible in the bounded error log.
 
 ## Automatic File Maintenance
 
@@ -89,6 +89,7 @@ optimize-module:
       new-farmer: true
       player-join: true
       player-sees-chunk: true
+      entire-loaded-farmer-area: true
       farmer-areas-only: true
     scan-radius:
       new-farmer-radius-chunks: 8
@@ -96,6 +97,9 @@ optimize-module:
     repeat-search:
       every-ticks: 200
       chunks-per-run: 2
+    priority:
+      enable: true
+      prioritized-scans-before-normal: 3
     limits:
       remembered-chunks: 8192
       scans-at-once: 1
@@ -129,7 +133,7 @@ The important controls are intentionally first. `max-harvests-per-tick` caps har
 
 Both user-facing cooldown systems are disabled by default. `delay-between-harvests` can add a steady delay between individual crops. `pause-after-batch` instead permits `after-harvests` attempts in one scope, pauses only that scope for `ticks`, and then continues automatically; unrelated Farmers/islands continue normally. Twenty ticks are approximately one second. Disabling both removes artificial Farmer cooldowns while the global queue, scheduler, and server load protections remain active.
 
-Config version 11 adds independent debug and bounded error-file settings. Existing version 8, 9, and 10 files are backed up and migrated automatically; valid optimization values, enabled modes, custom unknown entries, and runtime behavior are preserved. Version 10's default telemetry switch is retired so upgraded servers remain quiet until `logging.debug` is explicitly enabled. Old `OWNER`, `REGION`, `EVENT_DRIVEN`, `PERIODIC_LOADED_CHUNKS`, and `HYBRID` values become the clearer `PLAYER`, `LAND`, `EVENTS`, `TIMER`, and `BOTH` names.
+Config version 12 adds complete loaded-Farmer-area discovery and fair crop-pressure priority. Existing files are backed up and migrated automatically; valid optimization values, enabled modes, custom unknown entries, and runtime behavior are preserved. Version 11 introduced independent debug and bounded error-file settings, while version 10's retired telemetry switch remains disabled until `logging.debug` is explicitly enabled. Old `OWNER`, `REGION`, `EVENT_DRIVEN`, `PERIODIC_LOADED_CHUNKS`, and `HYBRID` values become the clearer `PLAYER`, `LAND`, `EVENTS`, `TIMER`, and `BOTH` names.
 
 The advanced hard limits remain global and bounded: `region-runs-per-tick` caps region task fan-out, and `sections-per-second` caps primary snapshot block reads in 4096-block units. `blocks-per-async-task` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests another bounded search; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
 
@@ -139,16 +143,16 @@ The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed 
 
 Snapshot section indexes are translated relative to the world's minimum build height. Worlds using negative Y values, including the standard `-64..320` range on Leaf, therefore scan every section without accessing a negative snapshot index. A failed initial discovery is retained in the bounded reconciliation registry so a transient capture or async scan failure cannot permanently hide an already mature crop chunk.
 
-Dense chunks discover up to `crops-found-per-scan` crops as one bounded batch. Repeat search skips a chunk while its harvest queue is still draining. When a candidate-limited chunk queue becomes empty, a single drain callback immediately requests the next bounded scan, producing a slow continuous stream without polling every loaded chunk or repeatedly scanning the same still-pending crops.
+Dense chunks discover up to `crops-found-per-scan` crops as one bounded batch. Their observed mature-crop count becomes bounded scan pressure, so accumulated fields move ahead of empty discovery chunks. `prioritized-scans-before-normal` still forces one FIFO discovery scan after each priority burst, guaranteeing that every admitted island chunk advances instead of starving behind dense fields. Repeat search skips a chunk while its harvest queue is still draining. When a candidate-limited chunk queue becomes empty, a single drain callback immediately requests the next bounded scan, producing a slow continuous stream without polling every loaded chunk or repeatedly scanning the same still-pending crops.
 
 ## Crop Tracking
 
 - `EVENTS` is the default. Growth and bone-meal signals harvest immediately, while only known crop or deferred chunks receive slow repeat searches.
 - `TIMER` disables immediate growth harvesting and rotates through a bounded registry of known loaded chunks.
 - `BOTH` combines immediate events with bounded loaded-chunk rotation.
-- Every signal under `crop-search.triggers` can be enabled independently. On large servers, keep broad `chunk-load: false`; `player-sees-chunk: true` performs bounded, near-player discovery only when the player is inside an enabled Farmer area.
+- Every signal under `crop-search.triggers` can be enabled independently. `entire-loaded-farmer-area: true` enumerates all currently loaded chunks of a SuperiorSkyblock Farmer island on join, reload, purchase, or GUI enable; it never loads an inactive chunk. On large servers, keep broad `chunk-load: false` unless every newly loaded Farmer chunk should be admitted immediately.
 - With `farmer-areas-only: true`, event and player search triggers are accepted only around an enabled Farmer (or when `withoutFarmer` is active). Set it to `false` if timer mode must discover chunk-loader farms with no nearby player.
-- Farmer purchase and GUI enable scans are nearest-first and inspect only chunks already sent to the player. Known crop chunks move into a size-bounded dormant registry on unload and are rescanned when loaded again, so leaving and returning to a farm does not require toggling AutoHarvest. Module reload and disable invalidate all queued state.
+- Complete Farmer-area scans are nearest-first, bounded by `remembered-chunks` and `waiting-scans`, and continue in fair FIFO order behind crop-pressure priority. If the optional island API is unavailable, the module falls back to the configured player radius. Known crop chunks move into a size-bounded dormant registry on unload and are rescanned when loaded again, so leaving and returning to a farm does not require toggling AutoHarvest. Module reload and disable invalidate all queued state.
 
 ## Stacked Crops
 

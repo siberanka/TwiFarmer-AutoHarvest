@@ -74,6 +74,9 @@ class ConfigurationMaintenanceTest {
         assertEquals(32, snapshot.tracking().maxCandidateAdmissionsPerTick());
         assertEquals(TrackingMode.EVENT_DRIVEN, snapshot.tracking().mode());
         assertTrue(snapshot.tracking().scanOnPlayerChunkLoad());
+        assertTrue(snapshot.tracking().scanEntireLoadedFarmerArea());
+        assertTrue(snapshot.tracking().cropPriorityEnabled());
+        assertEquals(3, snapshot.tracking().prioritizedScansBeforeNormal());
         assertEquals(35.0, snapshot.backpressure().slowdownAboveMspt());
         assertEquals(10, snapshot.backpressure().minimumWorkPercent());
         assertTrue(snapshot.stackedCrops().enabled());
@@ -194,7 +197,7 @@ class ConfigurationMaintenanceTest {
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(11, repaired.getInt("config-version"));
+        assertEquals(12, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 
@@ -220,7 +223,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(11, migrated.getInt("config-version"));
+        assertEquals(12, migrated.getInt("config-version"));
         assertEquals(47, snapshot.optimization().globalMaxJobsPerTick());
         assertTrue(snapshot.optimization().perHarvestDelayEnabled());
         assertEquals(HarvestPacingScope.REGION, snapshot.optimization().harvestScope());
@@ -302,7 +305,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(11, migrated.getInt("config-version"));
+        assertEquals(12, migrated.getInt("config-version"));
         assertEquals(3, snapshot.optimization().initialDelayTicks());
         assertEquals(2, snapshot.optimization().continuationDelayTicks());
         assertEquals(9, snapshot.optimization().maxJobsPerRun());
@@ -324,7 +327,10 @@ class ConfigurationMaintenanceTest {
         assertFalse(snapshot.tracking().scanOnFarmerPurchase());
         assertFalse(snapshot.tracking().scanOnPlayerJoin());
         assertFalse(snapshot.tracking().scanOnPlayerChunkLoad());
+        assertTrue(snapshot.tracking().scanEntireLoadedFarmerArea());
         assertFalse(snapshot.tracking().farmerRegionsOnly());
+        assertTrue(snapshot.tracking().cropPriorityEnabled());
+        assertEquals(3, snapshot.tracking().prioritizedScansBeforeNormal());
         assertEquals(400, snapshot.tracking().reconcileIntervalTicks());
         assertEquals(3, snapshot.tracking().maxChunksPerCycle());
         assertEquals(9000, snapshot.tracking().maxTrackedChunks());
@@ -390,11 +396,44 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(11, migrated.getInt("config-version"));
+        assertEquals(12, migrated.getInt("config-version"));
         assertFalse(snapshot.logging().debugEnabled());
         assertEquals(450, snapshot.logging().debugIntervalSeconds());
         assertFalse(migrated.contains("optimize-module.advanced.logging"));
         assertEquals("preserved", migrated.getString("custom-extension"));
+    }
+
+    @Test
+    void migratesV11SearchSettingsWithoutOverwritingExplicitValues() throws Exception {
+        File target = temporaryDirectory.resolve("config.yml").toFile();
+        Files.writeString(target.toPath(), """
+                config-version: 11
+                status: true
+                optimize-module:
+                  enable: true
+                  crop-search:
+                    triggers:
+                      entire-loaded-farmer-area: false
+                    priority:
+                      enable: false
+                      prioritized-scans-before-normal: 5
+                custom-extension: preserved
+                """, StandardCharsets.UTF_8);
+
+        ConfigurationMaintenance.ConfigSnapshot snapshot = reconcileConfig(target);
+        YamlConfiguration migrated = YamlConfiguration.loadConfiguration(target);
+
+        assertTrue(snapshot.repaired());
+        assertEquals(1, backupCount());
+        assertEquals(12, migrated.getInt("config-version"));
+        assertFalse(snapshot.tracking().scanEntireLoadedFarmerArea());
+        assertFalse(snapshot.tracking().cropPriorityEnabled());
+        assertEquals(5, snapshot.tracking().prioritizedScansBeforeNormal());
+        assertEquals("preserved", migrated.getString("custom-extension"));
+
+        ConfigurationMaintenance.ConfigSnapshot secondPass = reconcileConfig(target);
+        assertFalse(secondPass.repaired());
+        assertEquals(1, backupCount());
     }
 
     @Test

@@ -113,14 +113,8 @@ public class AutoHarvestEvent implements Listener {
                 if (!farmer.getAttributeStatus("autoharvest")) {
                     return null;
                 }
-                String owner = farmer.getOwnerUUID() == null
-                        ? "unknown" : farmer.getOwnerUUID().toString();
-                return switch (settings.harvestScope()) {
-                    case OWNER -> "owner:" + owner;
-                    case FARMER -> "farmer:" + owner + ':' + farmer.getId();
-                    case REGION -> "region:" + regionId;
-                    case CHUNK -> chunkScope;
-                };
+                return HarvestScopeKeys.resolve(settings.harvestScope(), regionId,
+                        farmer.getId(), farmer::getOwnerUUID, chunkScope);
             }
         }
         catch (RuntimeException exception) {
