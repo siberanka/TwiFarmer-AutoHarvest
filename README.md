@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.8.0.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.9.0.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -135,7 +135,7 @@ Both user-facing cooldown systems are disabled by default. `delay-between-harves
 
 Config version 12 adds complete loaded-Farmer-area discovery and fair crop-pressure priority. Existing files are backed up and migrated automatically; valid optimization values, enabled modes, custom unknown entries, and runtime behavior are preserved. Version 11 introduced independent debug and bounded error-file settings, while version 10's retired telemetry switch remains disabled until `logging.debug` is explicitly enabled. Old `OWNER`, `REGION`, `EVENT_DRIVEN`, `PERIODIC_LOADED_CHUNKS`, and `HYBRID` values become the clearer `PLAYER`, `LAND`, `EVENTS`, `TIMER`, and `BOTH` names.
 
-The advanced hard limits remain global and bounded: `region-runs-per-tick` caps region task fan-out, and `sections-per-second` caps primary snapshot block reads in 4096-block units. `blocks-per-async-task` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests another bounded search; it never bypasses limits with a direct task. Even with thousands of loaded chunks, AutoHarvest never starts an unbounded full-world sweep.
+The advanced hard limits remain global and bounded: `region-runs-per-tick` caps region task fan-out, and `sections-per-second` caps primary snapshot block reads in 4096-block units. `blocks-per-async-task` prevents one async task from monopolizing a worker. Queue overflow leaves the live crop untouched and requests another bounded search; it never bypasses limits with a direct task. Reaching `remembered-chunks` only limits the hot chunk cache, while reaching `waiting-scans` keeps the affected Farmer-area cursor at the same chunk for a later retry.
 
 Server load protection uses Paper's rolling MSPT with hysteresis. Above `slow-down-at-mspt`, it gradually scales harvest jobs, region scheduler submissions, repeat searches, snapshot captures, scan starts, section reads, and async task sizes down toward `minimum-speed-percent`. At `stop-at-mspt` it temporarily stops new work and resumes only below `resume-below-mspt`. It also observes region callback delay, which protects Folia/Leaf when one region is overloaded even if a global average looks healthy. Debug logging emits cumulative counters only at the configured low frequency and only when useful work, deferral, or failure exists.
 
@@ -143,7 +143,7 @@ The optimization path is async-safe: immutable `ChunkSnapshot` data is analyzed 
 
 Snapshot section indexes are translated relative to the world's minimum build height. Worlds using negative Y values, including the standard `-64..320` range on Leaf, therefore scan every section without accessing a negative snapshot index. A failed initial discovery is retained in the bounded reconciliation registry so a transient capture or async scan failure cannot permanently hide an already mature crop chunk.
 
-Dense chunks discover up to `crops-found-per-scan` crops as one bounded batch. Their observed mature-crop count becomes bounded scan pressure, so accumulated fields move ahead of empty discovery chunks. `prioritized-scans-before-normal` still forces one FIFO discovery scan after each priority burst, guaranteeing that every admitted island chunk advances instead of starving behind dense fields. Repeat search skips a chunk while its harvest queue is still draining. When a candidate-limited chunk queue becomes empty, a single drain callback immediately requests the next bounded scan, producing a slow continuous stream without polling every loaded chunk or repeatedly scanning the same still-pending crops.
+Dense chunks discover up to `crops-found-per-scan` crops as one bounded batch. Their observed mature-crop count becomes bounded scan pressure, so accumulated fields move ahead of empty discovery chunks. `prioritized-scans-before-normal` still forces one normal discovery scan after each priority burst. A separate per-Farmer round-robin cursor guarantees that scan limits slow all registered active islands instead of permanently excluding islands that arrive after a global queue fills. Repeat search skips a chunk while its harvest queue is still draining. When a candidate-limited chunk queue becomes empty, a single drain callback immediately requests the next bounded scan.
 
 ## Crop Tracking
 
@@ -152,7 +152,7 @@ Dense chunks discover up to `crops-found-per-scan` crops as one bounded batch. T
 - `BOTH` combines immediate events with bounded loaded-chunk rotation.
 - Every signal under `crop-search.triggers` can be enabled independently. `entire-loaded-farmer-area: true` enumerates all currently loaded chunks of a SuperiorSkyblock Farmer island on join, reload, purchase, or GUI enable; it never loads an inactive chunk. On large servers, keep broad `chunk-load: false` unless every newly loaded Farmer chunk should be admitted immediately.
 - With `farmer-areas-only: true`, event and player search triggers are accepted only around an enabled Farmer (or when `withoutFarmer` is active). Set it to `false` if timer mode must discover chunk-loader farms with no nearby player.
-- Complete Farmer-area scans are nearest-first, bounded by `remembered-chunks` and `waiting-scans`, and continue in fair FIFO order behind crop-pressure priority. If the optional island API is unavailable, the module falls back to the configured player radius. Known crop chunks move into a size-bounded dormant registry on unload and are rescanned when loaded again, so leaving and returning to a farm does not require toggling AutoHarvest. Module reload and disable invalidate all queued state.
+- Complete Farmer-area scans seed nearby chunks first, then retain only a small cursor per active Farmer and lazily rotate its currently loaded chunks. `chunks-per-run` is a global per-pass budget distributed round-robin across Farmer areas; increasing island count increases completion time but does not remove a registered active island from service. Chunks are never force-loaded. If the optional island API is unavailable, the module falls back to the configured player radius. Module reload and disable invalidate all queued state.
 
 ## Stacked Crops
 

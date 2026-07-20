@@ -61,6 +61,7 @@ public final class CropTrackingService implements Listener {
     private final ConcurrentLinkedQueue<TrackedChunk> trackedOrder = new ConcurrentLinkedQueue<>();
     private final ConcurrentHashMap<ChunkKey, Long> loadedChunks = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<TrackedChunk> loadedOrder = new ConcurrentLinkedQueue<>();
+    private final FairFarmerAreaQueue farmerAreas = new FairFarmerAreaQueue();
     private final FairScanQueue<ChunkKey> scanQueue = new FairScanQueue<>();
     private final ConcurrentLinkedQueue<ScanWork> sliceQueue = new ConcurrentLinkedQueue<>();
     private final ConcurrentHashMap<ChunkKey, Integer> cropPressure = new ConcurrentHashMap<>();
@@ -134,6 +135,7 @@ public final class CropTrackingService implements Listener {
         trackedOrder.clear();
         loadedChunks.clear();
         loadedOrder.clear();
+        farmerAreas.clear();
         scanQueue.clear();
         sliceQueue.clear();
         cropPressure.clear();
@@ -150,6 +152,15 @@ public final class CropTrackingService implements Listener {
     public void onChunkLoad(@NotNull ChunkLoadEvent event) {
         TrackingSettings current = settings;
         ChunkKey key = new ChunkKey(event.getWorld().getUID(), event.getChunk().getX(), event.getChunk().getZ());
+        Location center = null;
+        String farmerRegion = null;
+        if (current.scanEntireLoadedFarmerArea() && SuperiorFarmerAreaAccess.supportsRegionLookup()) {
+            center = chunkCenter(event.getChunk());
+            farmerRegion = resolveEnabledFarmerRegion(center);
+            if (farmerRegion != null) {
+                farmerAreas.register(farmerRegion);
+            }
+        }
         if (dormantChunks.take(key)) {
             if (current.reconcilesLoadedChunks()) {
                 trackLoaded(key);
@@ -163,8 +174,12 @@ public final class CropTrackingService implements Listener {
             trackLoaded(event.getChunk());
         }
         if (current.scanOnChunkLoad()) {
-            Location center = chunkCenter(event.getChunk());
-            if (!current.farmerRegionsOnly() || module.isWithoutFarmer() || hasEnabledFarmer(center)) {
+            if (center == null) {
+                center = chunkCenter(event.getChunk());
+            }
+            boolean allowed = !current.farmerRegionsOnly() || module.isWithoutFarmer()
+                    || farmerRegion != null || hasEnabledFarmer(center);
+            if (allowed) {
                 if (current.reconcilesLoadedChunks()) {
                     trackLoaded(key);
                 }
@@ -203,9 +218,18 @@ public final class CropTrackingService implements Listener {
                 || Math.abs(chunk.getZ() - playerChunkZ) > current.bootstrapRadiusChunks()) {
             return;
         }
-        if (!WorldHelper.isFarmerAllowed(chunk.getWorld().getName())
-                || (current.farmerRegionsOnly() && !module.isWithoutFarmer()
-                && !hasEnabledFarmer(chunkCenter(chunk)))) {
+        if (!WorldHelper.isFarmerAllowed(chunk.getWorld().getName())) {
+            return;
+        }
+        String farmerRegion = null;
+        if (current.scanEntireLoadedFarmerArea() || (current.farmerRegionsOnly() && !module.isWithoutFarmer())) {
+            farmerRegion = resolveEnabledFarmerRegion(chunkCenter(chunk));
+        }
+        if (current.scanEntireLoadedFarmerArea() && farmerRegion != null
+                && SuperiorFarmerAreaAccess.supportsRegionLookup()) {
+            farmerAreas.register(farmerRegion);
+        }
+        if (current.farmerRegionsOnly() && !module.isWithoutFarmer() && farmerRegion == null) {
             return;
         }
         if (current.reconcilesLoadedChunks()) {
@@ -280,8 +304,9 @@ public final class CropTrackingService implements Listener {
             return;
         }
         ChunkKey key = new ChunkKey(world.getUID(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
+        registerFarmerArea(location, settings);
         track(key);
-        cropPressure.merge(key, settings.maxCandidatesPerScan(), Math::max);
+        rememberCropPressure(key, settings.maxCandidatesPerScan());
         requestScan(world, key.chunkX(), key.chunkZ(), true);
     }
 
@@ -341,12 +366,19 @@ public final class CropTrackingService implements Listener {
                 }
             }
 
+            boolean lazyAreaScan = SuperiorFarmerAreaAccess.supportsRegionLookup();
+            if (lazyAreaScan) {
+                farmerAreas.register(area.regionId());
+            }
+
             Location playerLocation = player.getLocation();
             List<Chunk> chunks = new ArrayList<>(area.chunks());
             chunks.sort(Comparator.comparingInt(chunk -> chunkDistance(chunk, playerLocation)));
             int accepted = 0;
+            int immediateLimit = lazyAreaScan
+                    ? Math.max(1, current.maxChunksPerCycle()) : current.maxTrackedChunks();
             for (Chunk chunk : chunks) {
-                if (accepted >= current.maxTrackedChunks()) {
+                if (accepted >= immediateLimit) {
                     break;
                 }
                 if (!WorldHelper.isFarmerAllowed(chunk.getWorld().getName())) {
@@ -401,8 +433,12 @@ public final class CropTrackingService implements Listener {
         refillBudgets(current, now, workPercent);
         if (now >= nextReconcileNanos) {
             if (workPercent > 0) {
-                enqueueTracked(AdaptiveBackpressure.scaleLimit(current.maxChunksPerCycle(), workPercent),
-                        current.reconcilesLoadedChunks());
+                int cycleLimit = AdaptiveBackpressure.scaleLimit(current.maxChunksPerCycle(), workPercent);
+                int areaVisits = current.scanEntireLoadedFarmerArea()
+                        ? enqueueFarmerAreas(cycleLimit, current) : 0;
+                if (areaVisits < cycleLimit) {
+                    enqueueTracked(cycleLimit - areaVisits, current.reconcilesLoadedChunks());
+                }
             }
             nextReconcileNanos = now + ticksToNanos(current.reconcileIntervalTicks());
         }
@@ -448,6 +484,52 @@ public final class CropTrackingService implements Listener {
                 }
             }
         }
+    }
+
+    private int enqueueFarmerAreas(int maximum, TrackingSettings current) {
+        int visited = 0;
+        while (visited < maximum) {
+            FairFarmerAreaQueue.Lease lease = farmerAreas.poll();
+            if (lease == null) {
+                break;
+            }
+            visited++;
+            try {
+                Farmer farmer = FarmerAccess.findByRegionId(lease.regionId());
+                if (!isFarmerEnabled(farmer)) {
+                    farmerAreas.complete(lease, lease.cursor(), false);
+                    continue;
+                }
+                var loadedChunk = SuperiorFarmerAreaAccess.findNextLoadedChunk(
+                        lease.regionId(), lease.cursor());
+                if (loadedChunk.isEmpty()) {
+                    farmerAreas.complete(lease, lease.cursor(), false);
+                    continue;
+                }
+
+                SuperiorFarmerAreaAccess.LoadedChunk next = loadedChunk.get();
+                Chunk chunk = next.chunk();
+                if (!WorldHelper.isFarmerAllowed(chunk.getWorld().getName())) {
+                    farmerAreas.complete(lease, next.nextCursor(), true);
+                    continue;
+                }
+                ChunkKey key = new ChunkKey(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ());
+                if (current.reconcilesLoadedChunks()) {
+                    trackLoaded(key);
+                }
+                else {
+                    track(key);
+                }
+                boolean admitted = module.hasPendingHarvests(key.worldId(), key.chunkX(), key.chunkZ())
+                        || requestScan(chunk.getWorld(), chunk.getX(), chunk.getZ(), false);
+                farmerAreas.complete(lease, admitted ? next.nextCursor() : lease.cursor(), true);
+            }
+            catch (RuntimeException exception) {
+                farmerAreas.complete(lease, lease.cursor(), true);
+                logFailure("could not advance a fair Farmer area scan", exception);
+            }
+        }
+        return visited;
     }
 
     private void dispatchCaptures(TrackingSettings current, long generation, int workPercent) {
@@ -573,7 +655,7 @@ public final class CropTrackingService implements Listener {
         else {
             int pressure = result.candidateLimitReached()
                     ? current.maxCandidatesPerScan() : result.candidates().size();
-            cropPressure.put(work.key(), pressure);
+            rememberCropPressure(work.key(), pressure);
         }
         if (result.containsCrop() && !current.reconcilesLoadedChunks()) {
             track(work.key());
@@ -673,25 +755,38 @@ public final class CropTrackingService implements Listener {
         }
         World world = Bukkit.getWorld(worldId);
         if (world != null) {
-            cropPressure.put(key, settings.maxCandidatesPerScan());
+            rememberCropPressure(key, settings.maxCandidatesPerScan());
             requestScan(world, chunkX, chunkZ, true);
         }
     }
 
-    private void requestScan(World world, int chunkX, int chunkZ, boolean wake) {
+    private boolean requestScan(World world, int chunkX, int chunkZ, boolean wake) {
         if (!running || !WorldHelper.isFarmerAllowed(world.getName())) {
-            return;
+            return false;
         }
         ChunkKey key = new ChunkKey(world.getUID(), chunkX, chunkZ);
         int pressure = settings.cropPriorityEnabled() ? cropPressure.getOrDefault(key, 0) : 0;
         FairScanQueue.OfferResult result = scanQueue.offer(key, pressure, settings.maxPendingScans());
         if (result == FairScanQueue.OfferResult.FULL) {
             droppedScanRequests.increment();
-            return;
+            return false;
         }
         if (wake && (result == FairScanQueue.OfferResult.ENQUEUED
                 || result == FairScanQueue.OfferResult.PROMOTED)) {
             scheduleTick(1L);
+        }
+        return true;
+    }
+
+    private void rememberCropPressure(ChunkKey key, int pressure) {
+        cropPressure.computeIfPresent(key, (ignored, current) -> Math.max(current, pressure));
+        if (cropPressure.containsKey(key)) {
+            return;
+        }
+        synchronized (cropPressure) {
+            if (cropPressure.size() < settings.maxTrackedChunks()) {
+                cropPressure.putIfAbsent(key, pressure);
+            }
         }
     }
 
@@ -751,26 +846,53 @@ public final class CropTrackingService implements Listener {
     }
 
     private boolean trackingLocationAllowed(Location location, TrackingSettings current) {
-        return !current.farmerRegionsOnly() || module.isWithoutFarmer() || hasEnabledFarmer(location);
+        if (!current.farmerRegionsOnly() || module.isWithoutFarmer()) {
+            registerFarmerArea(location, current);
+            return true;
+        }
+        String regionId = resolveEnabledFarmerRegion(location);
+        if (regionId != null && current.scanEntireLoadedFarmerArea()
+                && SuperiorFarmerAreaAccess.supportsRegionLookup()) {
+            farmerAreas.register(regionId);
+        }
+        return regionId != null;
+    }
+
+    private void registerFarmerArea(Location location, TrackingSettings current) {
+        if (!current.scanEntireLoadedFarmerArea() || !SuperiorFarmerAreaAccess.supportsRegionLookup()) {
+            return;
+        }
+        String regionId = resolveEnabledFarmerRegion(location);
+        if (regionId != null) {
+            farmerAreas.register(regionId);
+        }
     }
 
     private boolean hasEnabledFarmer(Location location) {
+        return resolveEnabledFarmerRegion(location) != null;
+    }
+
+    private String resolveEnabledFarmerRegion(Location location) {
         try {
             String regionId = FarmerRegionAccess.resolveRegionId(location);
             if (regionId == null) {
-                return false;
+                return null;
             }
             Farmer farmer = FarmerAccess.findByRegionId(regionId);
-            if (farmer == null) {
-                return false;
-            }
-            synchronized (farmer) {
-                return farmer.getAttributeStatus("autoharvest");
-            }
+            return isFarmerEnabled(farmer) ? regionId : null;
         }
         catch (RuntimeException exception) {
             logFailure("could not validate a Farmer tracking scope", exception);
+            return null;
+        }
+    }
+
+    private boolean isFarmerEnabled(Farmer farmer) {
+        if (farmer == null) {
             return false;
+        }
+        synchronized (farmer) {
+            return farmer.getAttributeStatus("autoharvest");
         }
     }
 
@@ -871,10 +993,11 @@ public final class CropTrackingService implements Listener {
             return;
         }
         nextTelemetryNanos = now + current.logIntervalSeconds() * SECOND_NANOS;
-        if (scanQueue.size() > 0 || droppedScanRequests.sum() > 0) {
+        if (scanQueue.size() > 0 || farmerAreas.size() > 0 || droppedScanRequests.sum() > 0) {
             module.logDebug("AutoHarvest tracking: mode=" + settings.mode()
                     + ", pending=" + scanQueue.size() + ", active=" + activeScans.get()
                     + ", priority-pending=" + scanQueue.prioritizedSize()
+                    + ", farmer-areas=" + farmerAreas.size()
                     + ", tracked=" + trackedChunks.size() + ", loaded=" + loadedChunks.size()
                     + ", dormant=" + dormantChunks.size() + ", dense=" + denseChunks.size()
                     + ", completed=" + completedScans.sum() + ", blocks=" + scannedBlocks.sum()

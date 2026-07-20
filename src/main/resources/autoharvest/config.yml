@@ -110,7 +110,7 @@ optimize-module:
       player-join: true
       # Rechecks a chunk when it becomes visible to a player after movement.
       player-sees-chunk: true
-      # Discovers every currently loaded chunk of a player's Farmer island on join/reload/purchase.
+      # Fairly rotates every currently loaded chunk of each active Farmer island without force-loading.
       entire-loaded-farmer-area: true
       # Rejects search triggers outside active Farmer areas unless withoutFarmer is true.
       farmer-areas-only: true
@@ -120,9 +120,9 @@ optimize-module:
       # Visible chunk radius searched around players on join, reload and movement.
       player-radius-chunks: 3
     repeat-search:
-      # Ticks between bounded checks of chunks already known to contain crops.
+      # Ticks between bounded fair passes over active Farmer areas and known crop chunks.
       every-ticks: 200
-      # Number of known chunks returned to the scan queue each repeat.
+      # Global area/chunk cursor steps per pass; lower values slow every island fairly.
       chunks-per-run: 2
     priority:
       # Gives chunks with more mature crops earlier scans without starving normal discovery.
@@ -131,7 +131,7 @@ optimize-module:
       prioritized-scans-before-normal: 3
     # Advanced search limits below normally do not need changing.
     limits:
-      # Maximum crop-bearing or loaded chunks remembered in memory.
+      # Maximum hot crop/chunk cache size; reaching it never removes an island from fair rotation.
       remembered-chunks: 8192
       # Maximum chunk scans kept active at the same time.
       scans-at-once: 1
@@ -143,7 +143,7 @@ optimize-module:
       sections-per-second: 32
       # Maximum block reads performed by one asynchronous task.
       blocks-per-async-task: 8192
-      # Maximum unique chunk scan requests waiting in memory.
+      # Maximum unique scans waiting in memory; full queues retain island cursors for later retry.
       waiting-scans: 4096
       # Maximum mature crops returned by one chunk scan.
       crops-found-per-scan: 512

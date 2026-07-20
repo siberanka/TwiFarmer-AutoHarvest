@@ -16,7 +16,9 @@ import xyz.geik.farmer.modules.autoharvest.configuration.TelemetrySettings;
 import xyz.geik.farmer.modules.autoharvest.logging.ModuleDiagnostics;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -88,6 +90,53 @@ class OptimizedHarvestQueueTest {
 
             assertEquals(10, executions.get());
             assertEquals(90, queue.stats().pendingJobs());
+        }
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void smallGlobalBudgetEventuallyHarvestsEveryFarmerScope() {
+        OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
+        queue.configure(settings(1, 3, 3, 512), BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
+
+        Plugin plugin = mock(Plugin.class);
+        World world = mock(World.class);
+        RegionScheduler regionScheduler = mock(RegionScheduler.class);
+        GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+        ScheduledTask ticker = mock(ScheduledTask.class);
+        AtomicReference<Consumer<ScheduledTask>> tick = new AtomicReference<>();
+        Set<Integer> harvestedFarmers = new HashSet<>();
+        when(world.getUID()).thenReturn(UUID.randomUUID());
+        when(ticker.getOwningPlugin()).thenReturn(plugin);
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(globalScheduler);
+            bukkit.when(Bukkit::getRegionScheduler).thenReturn(regionScheduler);
+            bukkit.when(Bukkit::getAverageTickTime).thenReturn(10.0);
+            doAnswer(invocation -> {
+                tick.set(invocation.getArgument(1));
+                return ticker;
+            }).when(globalScheduler).runAtFixedRate(eq(plugin), any(), eq(1L), eq(1L));
+            doAnswer(invocation -> {
+                Consumer callback = invocation.getArgument(2);
+                callback.accept(null);
+                return null;
+            }).when(regionScheduler).run(eq(plugin), any(Location.class), any());
+
+            int farmerCount = 200;
+            for (int index = 0; index < farmerCount; index++) {
+                int farmerId = index;
+                assertEquals(OptimizedHarvestQueue.SubmitResult.ENQUEUED,
+                        queue.submit(plugin, location(world, index * 16), "farmer:" + index,
+                                () -> harvestedFarmers.add(farmerId), LOGGER));
+            }
+            for (int cycle = 0; cycle < 100 && harvestedFarmers.size() < farmerCount; cycle++) {
+                tick.get().accept(ticker);
+            }
+
+            assertEquals(farmerCount, harvestedFarmers.size());
+            assertEquals(0, queue.stats().pendingJobs());
+            assertEquals(0, queue.stats().pendingScopes());
         }
     }
 
