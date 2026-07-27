@@ -6,7 +6,7 @@
 
     <groupId>xyz.geik.farmer</groupId>
     <artifactId>Farmer-AutoHarvest</artifactId>
-    <version>1.9.1</version>
+    <version>1.9.2</version>
     <name>Farmer AutoHarvest</name>
     <description>Paper, Folia and Leaf compatible automatic harvesting module for Farmer.</description>
     <url>https://github.com/siberanka/TwiFarmer-AutoHarvest</url>
@@ -28,7 +28,7 @@
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
-        <farmer.version>v6-b123</farmer.version>
+        <farmer.version>v6-b113</farmer.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <junit.version>5.12.2</junit.version>
@@ -47,8 +47,8 @@
         </dependency>
         <!-- Farmer -->
         <dependency>
-            <groupId>com.github.siberanka</groupId>
-            <artifactId>TwiFarmer</artifactId>
+            <groupId>com.github.Geik-xyz</groupId>
+            <artifactId>Farmer-v6</artifactId>
             <version>${farmer.version}</version>
             <scope>provided</scope>
             <exclusions>

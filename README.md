@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b123 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.9.1.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.9.2.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 

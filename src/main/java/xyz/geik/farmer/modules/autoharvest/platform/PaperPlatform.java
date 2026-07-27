@@ -2,7 +2,6 @@ package xyz.geik.farmer.modules.autoharvest.platform;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Entity;
-import xyz.geik.farmer.api.FarmerCompatibilityAPI;
 
 /**
  * Detects the Paper scheduler API required by this module.
@@ -25,9 +24,12 @@ public final class PaperPlatform {
 
     public static boolean isSupported() {
         try {
-            FarmerCompatibilityAPI.requireModuleApi(2);
+            ClassLoader loader = PaperPlatform.class.getClassLoader();
+            Class<?> farmerCompatibility = Class.forName(
+                    "xyz.geik.farmer.api.FarmerCompatibilityAPI", false, loader);
+            farmerCompatibility.getMethod("requireModuleApi", int.class).invoke(null, 2);
             for (String className : REQUIRED_CLASSES) {
-                Class.forName(className, false, Bukkit.class.getClassLoader());
+                Class.forName(className, false, loader);
             }
             Bukkit.class.getMethod("getRegionScheduler");
             Bukkit.class.getMethod("getGlobalRegionScheduler");
