@@ -116,10 +116,10 @@ class ConfigurationMaintenanceTest {
                 checkStock: true
                 defaultStatus: false
                 customPerm: " "
-                items: [WHEAT, AIR, MELON, WHEAT]
+                items: [WHEAT, AIR, MELON, WHEAT, minecraft:future_crop]
                 stacked-crops:
                   enable: "yes"
-                  items: [BAMBOO, AIR, KELP_PLANT, BAMBOO]
+                  items: [BAMBOO, AIR, KELP_PLANT, BAMBOO, FUTURE_STACK_CROP]
                   max-segments-per-harvest: 999
                 update-checker:
                   enable: "yes"
@@ -163,9 +163,10 @@ class ConfigurationMaintenanceTest {
         assertFalse(repaired.getBoolean("status"));
         assertFalse(repaired.getBoolean("checkAllDirections"));
         assertEquals("farmer.autoharvest", repaired.getString("customPerm"));
-        assertEquals(List.of("WHEAT", "MELON_SLICE"), repaired.getStringList("items"));
+        assertEquals(List.of("WHEAT", "MELON_SLICE", "FUTURE_CROP"), repaired.getStringList("items"));
         assertTrue(repaired.getBoolean("stacked-crops.enable"));
-        assertEquals(List.of("BAMBOO", "KELP"), repaired.getStringList("stacked-crops.items"));
+        assertEquals(List.of("BAMBOO", "KELP", "FUTURE_STACK_CROP"),
+                repaired.getStringList("stacked-crops.items"));
         assertEquals(32, repaired.getInt("stacked-crops.max-segments-per-harvest"));
         assertFalse(repaired.getBoolean("optimize-module.enable"));
         assertEquals(2, repaired.getInt("optimize-module.advanced.harvest-queue.first-run-delay-ticks"));

@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -540,11 +541,16 @@ public final class ConfigurationMaintenance {
             if (!(rawItem instanceof String crop) || crop.isBlank()) {
                 continue;
             }
-            XMaterial.matchXMaterial(crop.trim())
+            String identifier = normalizeMinecraftIdentifier(crop);
+            XMaterial.matchXMaterial(identifier)
                     .map(CropHarvesting::normalize)
                     .filter(CropHarvesting::isSupportedCrop)
                     .map(Enum::name)
                     .ifPresent(normalized::add);
+            if (!XMaterial.matchXMaterial(identifier).isPresent()
+                    && isFutureMinecraftIdentifier(identifier)) {
+                normalized.add(identifier);
+            }
         }
         return new ArrayList<>(normalized);
     }
@@ -578,13 +584,30 @@ public final class ConfigurationMaintenance {
             if (!(rawItem instanceof String crop) || crop.isBlank()) {
                 continue;
             }
-            XMaterial.matchXMaterial(crop.trim())
+            String identifier = normalizeMinecraftIdentifier(crop);
+            XMaterial.matchXMaterial(identifier)
                     .map(CropHarvesting::normalize)
                     .filter(CropHarvesting::isStackCrop)
                     .map(Enum::name)
                     .ifPresent(normalized::add);
+            if (!XMaterial.matchXMaterial(identifier).isPresent()
+                    && isFutureMinecraftIdentifier(identifier)) {
+                normalized.add(identifier);
+            }
         }
         return new ArrayList<>(normalized);
+    }
+
+    private static String normalizeMinecraftIdentifier(String value) {
+        String normalized = value.trim();
+        if (normalized.regionMatches(true, 0, "minecraft:", 0, "minecraft:".length())) {
+            normalized = normalized.substring("minecraft:".length());
+        }
+        return normalized.toUpperCase(Locale.ROOT);
+    }
+
+    private static boolean isFutureMinecraftIdentifier(String value) {
+        return value.matches("[A-Z][A-Z0-9_]{0,127}");
     }
 
     private static boolean repairLore(YamlConfiguration configuration, YamlConfiguration defaults, String path) {

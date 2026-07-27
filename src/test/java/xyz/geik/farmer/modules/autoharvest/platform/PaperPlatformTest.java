@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PaperPlatformTest {
 
     @Test
-    void paperRegionSchedulerApiIsOnTheCompileClasspath() {
+    void requiredPaperAndFarmerApisAreOnTheCompileClasspath() {
         assertTrue(PaperPlatform.isSupported());
     }
 }

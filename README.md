@@ -6,15 +6,15 @@ Automatically harvests mature crops inside Farmer regions and replants ageable c
 
 | Minecraft | Java | Server | Farmer |
 | --- | --- | --- | --- |
-| 1.21.x | 21 | Paper, Folia, Leaf | v6-b113 or newer |
-| 26.x | 25 | Paper, Folia, Leaf | v6-b113 or newer |
+| 1.21.x | 21 | Paper, Folia, Leaf | v6-b123 or newer |
+| 26.x | 25 | Paper, Folia, Leaf | v6-b123 or newer |
 
 Plain Bukkit and Spigot are intentionally unsupported. This is an external Farmer module, not a standalone `JavaPlugin`; the Farmer host plugin supplies the Folia metadata while this module uses Paper's region scheduler for all world access.
 
 ## Installation
 
-1. Install Farmer v6-b113 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.9.0.jar` in `plugins/Farmer/modules/`.
+1. Install Farmer v6-b123 or newer on Paper, Folia, or Leaf.
+2. Place `Farmer-AutoHarvest-1.9.1.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
