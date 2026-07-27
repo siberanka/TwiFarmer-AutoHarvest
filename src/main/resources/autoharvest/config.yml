@@ -15,7 +15,8 @@ checkAllDirections: false
 # Allows harvesting in allowed worlds without a Farmer-backed region.
 withoutFarmer: false
 
-# Prevents a Farmer harvest when its relevant stock is full.
+# Prevents a Farmer harvest when its configured primary crop stock is full.
+# Secondary vanilla drops (for example seeds) do not block the primary crop.
 checkStock: true
 
 # Initial AutoHarvest state for newly created Farmers.

@@ -32,6 +32,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -193,6 +194,79 @@ class OptimizedHarvestQueueTest {
 
             assertEquals(1, queue.stats().pendingJobs());
             assertEquals(65_536L, queue.stats().coalescedJobs());
+        }
+    }
+
+    @Test
+    void chunkTicketFailureDefersWithoutLeakingAQueueReservation() {
+        OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
+        ModuleDiagnostics diagnostics = mock(ModuleDiagnostics.class);
+        queue.configure(settings(4, 8, 4, 64), BackpressureSettings.DEFAULT,
+                TelemetrySettings.DISABLED, diagnostics);
+        Plugin plugin = mock(Plugin.class);
+        World world = mock(World.class);
+        Location crop = location(world, 8);
+        IllegalStateException failure = new IllegalStateException("ticket unavailable");
+        when(world.getUID()).thenReturn(UUID.randomUUID());
+        when(world.addPluginChunkTicket(0, 0, plugin)).thenThrow(failure);
+
+        assertEquals(OptimizedHarvestQueue.SubmitResult.DEFERRED,
+                queue.submit(plugin, crop, () -> { }, LOGGER));
+        assertEquals(0, queue.stats().pendingJobs());
+        assertEquals(0, queue.stats().pendingChunks());
+        assertEquals(0, queue.stats().pendingScopes());
+        verify(diagnostics).error("AutoHarvest could not retain a pending crop chunk.", failure);
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void repeatedBoneMealBurstsNeverLeaveTheCropPermanentlyPending() {
+        OptimizedHarvestQueue queue = new OptimizedHarvestQueue();
+        queue.configure(settings(4, 8, 4, 64), BackpressureSettings.DEFAULT, TelemetrySettings.DISABLED);
+        Plugin plugin = mock(Plugin.class);
+        World world = mock(World.class);
+        RegionScheduler regionScheduler = mock(RegionScheduler.class);
+        GlobalRegionScheduler globalScheduler = mock(GlobalRegionScheduler.class);
+        ScheduledTask ticker = mock(ScheduledTask.class);
+        AtomicReference<Consumer<ScheduledTask>> tick = new AtomicReference<>();
+        AtomicInteger harvests = new AtomicInteger();
+        Location crop = location(world, 8);
+        when(world.getUID()).thenReturn(UUID.randomUUID());
+        when(world.addPluginChunkTicket(0, 0, plugin)).thenReturn(true);
+        when(ticker.getOwningPlugin()).thenReturn(plugin);
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getGlobalRegionScheduler).thenReturn(globalScheduler);
+            bukkit.when(Bukkit::getRegionScheduler).thenReturn(regionScheduler);
+            bukkit.when(Bukkit::getAverageTickTime).thenReturn(10.0);
+            doAnswer(invocation -> {
+                tick.set(invocation.getArgument(1));
+                return ticker;
+            }).when(globalScheduler).runAtFixedRate(eq(plugin), any(), eq(1L), eq(1L));
+            doAnswer(invocation -> {
+                Consumer callback = invocation.getArgument(2);
+                callback.accept(null);
+                return null;
+            }).when(regionScheduler).run(eq(plugin), any(Location.class), any());
+
+            for (int burst = 0; burst < 2_048; burst++) {
+                assertEquals(OptimizedHarvestQueue.SubmitResult.ENQUEUED,
+                        queue.submit(plugin, crop, harvests::incrementAndGet, LOGGER));
+                for (int duplicate = 0; duplicate < 31; duplicate++) {
+                    assertEquals(OptimizedHarvestQueue.SubmitResult.COALESCED,
+                            queue.submit(plugin, crop, harvests::incrementAndGet, LOGGER));
+                }
+                tick.get().accept(ticker);
+                assertEquals(0, queue.stats().pendingJobs());
+            }
+
+            assertEquals(2_048, harvests.get());
+            assertEquals(0, queue.stats().pendingJobs());
+            assertEquals(0, queue.stats().pendingScopes());
+            verify(world, times(2_048))
+                    .addPluginChunkTicket(0, 0, plugin);
+            verify(world, times(2_048))
+                    .removePluginChunkTicket(0, 0, plugin);
         }
     }
 

@@ -32,6 +32,7 @@ public final class OptimizedHarvestQueue {
     private static final long OVERFLOW_LOG_INTERVAL_NANOS = 30_000_000_000L;
 
     private final ConcurrentMap<ChunkKey, ChunkQueue> queues = new ConcurrentHashMap<>();
+    private final ConcurrentMap<ChunkKey, ChunkLease> chunkLeases = new ConcurrentHashMap<>();
     private final ConcurrentMap<BlockKey, Boolean> pendingBlocks = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScopeState> scopes = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<ReadyQueue> readyQueues = new ConcurrentLinkedQueue<>();
@@ -136,9 +137,22 @@ public final class OptimizedHarvestQueue {
             return SubmitResult.DEFERRED;
         }
 
-        ScopeState scope = retainScope(scopeKey);
         ChunkKey chunkKey = new ChunkKey(world.getUID(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
-        QueueJob job = new QueueJob(blockKey, scopeKey, scope, action);
+        ChunkLease chunkLease;
+        try {
+            // A queued event can outlive its originating loaded chunk. Retain
+            // it until every admitted crop action for the chunk is released.
+            chunkLease = retainChunkLease(chunkKey, world, plugin);
+        }
+        catch (RuntimeException exception) {
+            pendingBlocks.remove(blockKey);
+            pendingJobs.updateAndGet(value -> Math.max(0, value - 1));
+            deferredJobs.increment();
+            diagnostics.error("AutoHarvest could not retain a pending crop chunk.", exception);
+            return SubmitResult.DEFERRED;
+        }
+        ScopeState scope = retainScope(scopeKey);
+        QueueJob job = new QueueJob(blockKey, scopeKey, scope, chunkKey, chunkLease, action);
         ChunkQueue queue;
         boolean ready = false;
         while (true) {
@@ -200,6 +214,10 @@ public final class OptimizedHarvestQueue {
             discardQueue(entry.getKey(), entry.getValue());
         }
         queues.clear();
+        for (var entry : chunkLeases.entrySet()) {
+            releaseAllChunkLeases(entry.getKey(), entry.getValue());
+        }
+        chunkLeases.clear();
         readyQueues.clear();
         pendingBlocks.clear();
         scopes.clear();
@@ -445,7 +463,46 @@ public final class OptimizedHarvestQueue {
             current.pendingJobs--;
             return current.pendingJobs <= 0 ? null : current;
         });
+        releaseChunkLease(job.chunkKey(), job.chunkLease());
         pendingJobs.updateAndGet(current -> Math.max(0, current - 1));
+    }
+
+    private ChunkLease retainChunkLease(ChunkKey key, World world, Plugin plugin) {
+        return chunkLeases.compute(key, (ignored, current) -> {
+            ChunkLease lease = current;
+            if (lease == null) {
+                boolean ownedTicket = world.addPluginChunkTicket(key.chunkX(), key.chunkZ(), plugin);
+                lease = new ChunkLease(world, plugin, ownedTicket);
+            }
+            lease.pendingJobs++;
+            return lease;
+        });
+    }
+
+    private void releaseChunkLease(ChunkKey key, ChunkLease expected) {
+        chunkLeases.computeIfPresent(key, (ignored, current) -> {
+            if (current != expected) {
+                return current;
+            }
+            current.pendingJobs--;
+            if (current.pendingJobs > 0) {
+                return current;
+            }
+            releaseAllChunkLeases(key, current);
+            return null;
+        });
+    }
+
+    private void releaseAllChunkLeases(ChunkKey key, ChunkLease lease) {
+        if (!lease.ownedTicket) {
+            return;
+        }
+        try {
+            lease.world.removePluginChunkTicket(key.chunkX(), key.chunkZ(), lease.plugin);
+        }
+        catch (RuntimeException exception) {
+            diagnostics.error("AutoHarvest could not release a completed crop chunk ticket.", exception);
+        }
     }
 
     private ScopeState retainScope(String scopeKey) {
@@ -575,7 +632,14 @@ public final class OptimizedHarvestQueue {
     private record BlockKey(UUID worldId, int blockX, int blockY, int blockZ) {
     }
 
-    private record QueueJob(BlockKey blockKey, String scopeKey, ScopeState scope, Runnable action) {
+    private record QueueJob(
+            BlockKey blockKey,
+            String scopeKey,
+            ScopeState scope,
+            ChunkKey chunkKey,
+            ChunkLease chunkLease,
+            Runnable action
+    ) {
     }
 
     private record ReadyQueue(ChunkKey key, ChunkQueue queue, long readyAtTick) {
@@ -597,5 +661,18 @@ public final class OptimizedHarvestQueue {
         private long pauseUntilTick;
         private int harvestsSincePause;
         private int pendingJobs;
+    }
+
+    private static final class ChunkLease {
+        private final World world;
+        private final Plugin plugin;
+        private final boolean ownedTicket;
+        private int pendingJobs;
+
+        private ChunkLease(World world, Plugin plugin, boolean ownedTicket) {
+            this.world = world;
+            this.plugin = plugin;
+            this.ownedTicket = ownedTicket;
+        }
     }
 }

@@ -215,7 +215,11 @@ public class AutoHarvestEvent implements Listener {
 
     private boolean hasStock(@NotNull Farmer farmer, @NotNull XMaterial material) {
         AutoHarvest module = AutoHarvest.getInstance();
-        if (module == null || !module.isCheckStock() || farmer.getAttributeStatus("autoseller")) {
+        if (module == null) {
+            return false;
+        }
+        boolean autoSeller = farmer.getAttributeStatus("autoseller");
+        if (!module.isCheckStock() || autoSeller) {
             return true;
         }
 
@@ -226,20 +230,18 @@ public class AutoHarvestEvent implements Listener {
         // Farmer only has a stock slot for materials declared by the host's
         // items.yml. Unmanaged crops must remain natural world drops instead
         // of being permanently blocked by a stock check they cannot satisfy.
-        if (!FarmerInv.checkMaterial(harvestedItem)) {
-            return true;
-        }
+        boolean primaryConfigured = FarmerInv.checkMaterial(harvestedItem);
+        boolean primaryAvailable = !primaryConfigured || isStockAvailable(farmer, material);
+        return primaryStockPermitsHarvest(true, false, primaryConfigured, primaryAvailable);
+    }
 
-        if (!isStockAvailable(farmer, material)) {
-            return false;
-        }
-
-        XMaterial seed = seedFor(material);
-        ItemStack seedItem = seed.parseItem();
-        return seed == XMaterial.AIR
-                || seedItem == null
-                || !FarmerInv.checkMaterial(seedItem)
-                || isStockAvailable(farmer, seed);
+    static boolean primaryStockPermitsHarvest(
+            boolean checkStock,
+            boolean autoSeller,
+            boolean primaryConfigured,
+            boolean primaryAvailable
+    ) {
+        return !checkStock || autoSeller || !primaryConfigured || primaryAvailable;
     }
 
     private boolean isStockAvailable(@NotNull Farmer farmer, @NotNull XMaterial material) {
@@ -255,14 +257,6 @@ public class AutoHarvestEvent implements Listener {
         catch (NoSuchElementException exception) {
             return false;
         }
-    }
-
-    private XMaterial seedFor(@NotNull XMaterial material) {
-        return switch (material.name()) {
-            case "WHEAT" -> XMaterial.WHEAT_SEEDS;
-            case "BEETROOT" -> XMaterial.BEETROOT_SEEDS;
-            default -> XMaterial.AIR;
-        };
     }
 
     private boolean pistonCheck(@NotNull Block block, boolean allDirections) {

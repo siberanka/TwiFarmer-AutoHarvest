@@ -14,7 +14,7 @@ Plain Bukkit and Spigot are intentionally unsupported. This is an external Farme
 ## Installation
 
 1. Install Farmer v6-b123 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.9.2.jar` in `plugins/Farmer/modules/`.
+2. Place `Farmer-AutoHarvest-1.9.3.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
@@ -179,6 +179,7 @@ Each supported column crop can be added or removed independently. `KELP` treats 
 - Stacked crops preserve their base and remove each validated segment above it exactly once.
 - Stale or duplicate jobs cannot harvest a crop that is no longer mature.
 - Farmer-linked operations revalidate ownership, module state, piston requirements, and stock before execution.
+- `checkStock` gates harvesting on the configured primary crop slot only. A full secondary vanilla drop such as wheat seeds cannot permanently block wheat harvesting; normal Farmer overflow behavior remains responsible for that secondary drop.
 - Module-triggered Farmer inventory paths are serialized per Farmer to avoid Folia region races.
 
 ## Building
