@@ -1,18 +1,24 @@
 enabled: "&aEnabled"
 disabled: "&cDisabled"
+locked: "&cLocked"
+module-name: "Auto Harvest"
+level-required: "&cAuto Harvest requires Farmer level &e{required_level}&c. Current level: &e{current_level}&c."
 
 update:
   available: "&e[{module}] Update available: &f{current} &7-> &a{latest}&7. Download: &b{url}"
 
 moduleGui:
+  click-to-toggle: "&aClick to toggle."
+  upgrade-to-unlock: "&eUpgrade Farmer to level {required_level} to unlock."
   icon:
     guiInterface: 'h'
     skull: "eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvNTk1ZWFhOTJkMmViOTY5NDI4NGI0ZTk4Y2FkZWNmZDdhODIzMjU2YmFkNWEzOTQ1OThmNjMyNGNmZTdmNzM3YiJ9fX0="
-    name: "&eAuto Harvester"
+    name: "&eAuto Harvest"
     lore:
-      - '&7With this module, farmer automatically'
-      - '&7break and replant farm items.'
+      - '&7Automatically harvests and replants'
+      - '&7supported crops inside the Farmer area.'
       - ''
+      - '&7Required Farmer Level: &e{required_level}'
       - '&7Status: &6{status}'
       - ''
-      - '&aClick to change.'
+      - '{action}'

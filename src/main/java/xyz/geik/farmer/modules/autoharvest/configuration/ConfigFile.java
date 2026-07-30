@@ -19,6 +19,7 @@ public final class ConfigFile {
     private final boolean withoutFarmer;
     private final boolean checkStock;
     private final boolean defaultStatus;
+    private final int requiredFarmerLevel;
     private final String customPerm;
     private final List<String> items;
 
@@ -29,6 +30,7 @@ public final class ConfigFile {
             boolean withoutFarmer,
             boolean checkStock,
             boolean defaultStatus,
+            int requiredFarmerLevel,
             String customPerm,
             List<String> items
     ) {
@@ -38,6 +40,7 @@ public final class ConfigFile {
         this.withoutFarmer = withoutFarmer;
         this.checkStock = checkStock;
         this.defaultStatus = defaultStatus;
+        this.requiredFarmerLevel = requiredFarmerLevel;
         this.customPerm = customPerm;
         this.items = List.copyOf(items);
     }
@@ -50,6 +53,7 @@ public final class ConfigFile {
                 configuration.getBoolean("withoutFarmer"),
                 configuration.getBoolean("checkStock"),
                 configuration.getBoolean("defaultStatus"),
+                configuration.getInt("required-farmer-level", 1),
                 configuration.getString("customPerm", "farmer.autoharvest"),
                 configuration.getStringList("items")
         );
@@ -77,6 +81,10 @@ public final class ConfigFile {
 
     public boolean isDefaultStatus() {
         return defaultStatus;
+    }
+
+    public int getRequiredFarmerLevel() {
+        return requiredFarmerLevel;
     }
 
     public String getCustomPerm() {

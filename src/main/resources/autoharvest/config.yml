@@ -1,7 +1,7 @@
 # Farmer AutoHarvest module configuration
 # Invalid known values are backed up and repaired automatically at startup/reload.
 
-config-version: 12
+config-version: 13
 
 # Enables the module and its Farmer GUI entry.
 status: false
@@ -13,6 +13,7 @@ requirePiston: false
 checkAllDirections: false
 
 # Allows harvesting in allowed worlds without a Farmer-backed region.
+# This global mode is fail-closed when required-farmer-level is higher than 1.
 withoutFarmer: false
 
 # Prevents a Farmer harvest when its configured primary crop stock is full.
@@ -21,6 +22,9 @@ checkStock: true
 
 # Initial AutoHarvest state for newly created Farmers.
 defaultStatus: false
+
+# Minimum one-based Farmer level required to use this module.
+required-farmer-level: 1
 
 # Permission required to toggle AutoHarvest in the Farmer GUI.
 customPerm: "farmer.autoharvest"

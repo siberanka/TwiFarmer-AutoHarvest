@@ -9,8 +9,10 @@ import org.jetbrains.annotations.NotNull;
 import xyz.geik.farmer.api.handlers.FarmerModuleGuiCreateEvent;
 import xyz.geik.farmer.helpers.gui.GuiHelper;
 import xyz.geik.farmer.model.Farmer;
+import xyz.geik.farmer.model.FarmerLevel;
 import xyz.geik.farmer.modules.autoharvest.AutoHarvest;
 import xyz.geik.glib.chat.ChatUtils;
+import xyz.geik.glib.chat.Placeholder;
 import xyz.geik.glib.shades.inventorygui.DynamicGuiElement;
 import xyz.geik.glib.shades.inventorygui.StaticGuiElement;
 
@@ -51,10 +53,15 @@ public class AutoHarvestGuiCreateEvent implements Listener {
                                 1,
                                 // Event written bottom
                                 click -> {
-                                    // If player don't have permission do nothing
-                                    if (!e.getPlayer().hasPermission(AutoHarvest.getInstance().getCustomPerm()))
-                                        return true;
+                                    AutoHarvest module = AutoHarvest.getInstance();
                                     if (!allowToggle(e.getPlayer().getUniqueId()))
+                                        return true;
+                                    if (!module.isAvailableFor(e.getFarmer())) {
+                                        sendLevelRequired(e.getFarmer(), e.getPlayer());
+                                        return true;
+                                    }
+                                    // If player don't have permission do nothing
+                                    if (!e.getPlayer().hasPermission(module.getCustomPerm()))
                                         return true;
                                     // Change attribute
                                     synchronized (e.getFarmer()) {
@@ -78,24 +85,47 @@ public class AutoHarvestGuiCreateEvent implements Listener {
      */
     @SuppressWarnings("deprecation")
     private @NotNull ItemStack getGuiItem(@NotNull Farmer farmer) {
-        ItemStack item = GuiHelper.getItem("moduleGui.icon", AutoHarvest.getInstance().getLang());
+        AutoHarvest module = AutoHarvest.getInstance();
+        ItemStack item = GuiHelper.getItem("moduleGui.icon", module.getLang());
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
             return item;
         }
-        String status = farmer.getAttributeStatus("autoharvest") ?
-                AutoHarvest.getInstance().getLang().getString("enabled") :
-                AutoHarvest.getInstance().getLang().getString("disabled");
+        int currentLevel = FarmerLevel.getLevelNumber(farmer.getLevel());
+        boolean available = module.isAvailableFor(farmer);
+        String status = available
+                ? (farmer.getAttributeStatus("autoharvest")
+                    ? module.getLang().getString("enabled")
+                    : module.getLang().getString("disabled"))
+                : module.getLang().getString("locked");
+        String action = available
+                ? module.getLang().getString("moduleGui.click-to-toggle")
+                : ChatUtils.replacePlaceholders(
+                        module.getLang().getString("moduleGui.upgrade-to-unlock"),
+                        new Placeholder("{required_level}", String.valueOf(module.getRequiredFarmerLevel())));
         List<String> lore = meta.getLore();
         if (lore != null) {
             List<String> updatedLore = new ArrayList<>(lore.size());
             for (String line : lore) {
-                updatedLore.add(line == null ? "" : line.replace("{status}", ChatUtils.color(status)));
+                updatedLore.add(line == null ? "" : ChatUtils.replacePlaceholders(
+                        line,
+                        new Placeholder("{status}", ChatUtils.color(status)),
+                        new Placeholder("{required_level}", String.valueOf(module.getRequiredFarmerLevel())),
+                        new Placeholder("{current_level}", String.valueOf(currentLevel)),
+                        new Placeholder("{action}", ChatUtils.color(action))));
             }
             meta.setLore(updatedLore);
         }
         item.setItemMeta(meta);
         return item;
+    }
+
+    private void sendLevelRequired(@NotNull Farmer farmer, org.bukkit.entity.Player player) {
+        AutoHarvest module = AutoHarvest.getInstance();
+        ChatUtils.sendMessage(player, ChatUtils.replacePlaceholders(
+                module.getLang().getString("level-required"),
+                new Placeholder("{required_level}", String.valueOf(module.getRequiredFarmerLevel())),
+                new Placeholder("{current_level}", String.valueOf(FarmerLevel.getLevelNumber(farmer.getLevel())))));
     }
 
     @EventHandler

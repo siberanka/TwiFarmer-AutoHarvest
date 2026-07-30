@@ -135,13 +135,14 @@ public final class ConfigurationMaintenance {
         changed |= migrateV9OptimizationPaths(configuration);
         changed |= migrateV10Logging(configuration);
         changed |= normalizeFriendlyOptionNames(configuration);
-        changed |= repairInteger(configuration, defaults, "config-version", 12, 12);
+        changed |= repairInteger(configuration, defaults, "config-version", 13, 13);
         changed |= repairBoolean(configuration, defaults, "status");
         changed |= repairBoolean(configuration, defaults, "requirePiston");
         changed |= repairBoolean(configuration, defaults, "checkAllDirections");
         changed |= repairBoolean(configuration, defaults, "withoutFarmer");
         changed |= repairBoolean(configuration, defaults, "checkStock");
         changed |= repairBoolean(configuration, defaults, "defaultStatus");
+        changed |= repairInteger(configuration, defaults, "required-farmer-level", 1, 1_000);
         changed |= repairString(configuration, defaults, "customPerm", ConfigurationMaintenance::isValidPermission);
         changed |= repairCropList(configuration, defaults);
         changed |= ensureSection(configuration, STACKED_CROPS);
@@ -254,11 +255,19 @@ public final class ConfigurationMaintenance {
         changed |= ensureSection(configuration, "update");
         changed |= repairString(configuration, defaults, "enabled", value -> !value.isBlank());
         changed |= repairString(configuration, defaults, "disabled", value -> !value.isBlank());
+        changed |= repairString(configuration, defaults, "locked", value -> !value.isBlank());
+        changed |= repairString(configuration, defaults, "module-name", value -> !value.isBlank());
+        changed |= repairString(configuration, defaults, "level-required",
+                value -> hasPlaceholders(value, "{required_level}", "{current_level}"));
+        changed |= repairString(configuration, defaults, "moduleGui.click-to-toggle", value -> !value.isBlank());
+        changed |= repairString(configuration, defaults, "moduleGui.upgrade-to-unlock",
+                value -> value.contains("{required_level}"));
         changed |= repairString(configuration, defaults, "moduleGui.icon.guiInterface",
                 value -> value.length() == 1 && !Character.isWhitespace(value.charAt(0)));
         changed |= repairString(configuration, defaults, "moduleGui.icon.skull", ConfigurationMaintenance::isValidBase64);
         changed |= repairString(configuration, defaults, "moduleGui.icon.name", value -> !value.isBlank());
-        changed |= repairLore(configuration, defaults, "moduleGui.icon.lore");
+        changed |= repairLore(configuration, defaults, "moduleGui.icon.lore",
+                "{status}", "{required_level}", "{action}");
         changed |= repairString(configuration, defaults, "update.available",
                 value -> hasPlaceholders(value, "{module}", "{current}", "{latest}", "{url}"));
         return changed;
@@ -610,10 +619,18 @@ public final class ConfigurationMaintenance {
         return value.matches("[A-Z][A-Z0-9_]{0,127}");
     }
 
-    private static boolean repairLore(YamlConfiguration configuration, YamlConfiguration defaults, String path) {
+    private static boolean repairLore(
+            YamlConfiguration configuration,
+            YamlConfiguration defaults,
+            String path,
+            String... requiredPlaceholders
+    ) {
         Object raw = configuration.get(path);
         if (raw instanceof List<?> lore && lore.stream().allMatch(String.class::isInstance)) {
-            return false;
+            String joined = String.join("\n", lore.stream().map(String.class::cast).toList());
+            if (hasPlaceholders(joined, requiredPlaceholders)) {
+                return false;
+            }
         }
         configuration.set(path, defaults.getStringList(path));
         return true;

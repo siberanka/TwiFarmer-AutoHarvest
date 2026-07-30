@@ -360,6 +360,8 @@ public class AutoHarvest extends FarmerModule {
         checkStock = configFile.isCheckStock();
         customPerm = configFile.getCustomPerm();
         setDefaultState(configFile.isDefaultStatus());
+        setRequiredFarmerLevel(configFile.getRequiredFarmerLevel());
+        setDisplayName(getLang().getString("module-name"));
         boolean configuredOptimization = optimizationSettings.enabled();
         activeOptimizationSettings = configuredOptimization
                 ? optimizationSettings : OptimizationSettings.baseline();
@@ -446,7 +448,9 @@ public class AutoHarvest extends FarmerModule {
     }
 
     public boolean isWithoutFarmer() {
-        return withoutFarmer;
+        // A crop outside every Farmer cannot prove a configured higher-level
+        // requirement, so only the default level-one gate permits global use.
+        return withoutFarmer && getRequiredFarmerLevel() == 1;
     }
 
     public boolean isCheckStock() {

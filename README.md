@@ -6,19 +6,26 @@ Automatically harvests mature crops inside Farmer regions and replants ageable c
 
 | Minecraft | Java | Server | Farmer |
 | --- | --- | --- | --- |
-| 1.21.x | 21 | Paper, Folia, Leaf | v6-b123 or newer |
-| 26.x | 25 | Paper, Folia, Leaf | v6-b123 or newer |
+| 1.21.x | 21 | Paper, Folia, Leaf | v6-b125 or newer |
+| 26.x | 25 | Paper, Folia, Leaf | v6-b125 or newer |
 
 Plain Bukkit and Spigot are intentionally unsupported. This is an external Farmer module, not a standalone `JavaPlugin`; the Farmer host plugin supplies the Folia metadata while this module uses Paper's region scheduler for all world access.
 
 ## Installation
 
-1. Install Farmer v6-b123 or newer on Paper, Folia, or Leaf.
-2. Place `Farmer-AutoHarvest-1.9.3.jar` in `plugins/Farmer/modules/`.
+1. Install Farmer v6-b125 or newer on Paper, Folia, or Leaf.
+2. Place `Farmer-AutoHarvest-1.9.4.jar` in `plugins/Farmer/modules/`.
 3. Restart the server.
 4. Configure `plugins/Farmer/modules/autoharvest/config.yml`.
 
 The module refuses to enable when Paper's region scheduler API is unavailable.
+
+Auto Harvest is available from Farmer level 1 by default. Set
+`required-farmer-level` to a higher one-based level to make the module unlock at
+that Farmer upgrade. Locked Farmers cannot toggle or run the module; their saved
+preference is retained and safely resumes if they later meet the requirement.
+Because a crop outside every Farmer has no Farmer level to verify,
+`withoutFarmer` is effective only while `required-farmer-level` is `1`.
 
 Crop block discovery uses an explicit modern-material table. Legacy Bukkit constants are never passed to XMaterial during startup, allowing the module and its management-panel icon to load reliably on current Paper, Folia, and Leaf builds.
 

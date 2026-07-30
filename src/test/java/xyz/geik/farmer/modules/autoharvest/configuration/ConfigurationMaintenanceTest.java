@@ -89,6 +89,7 @@ class ConfigurationMaintenanceTest {
         assertEquals(300, snapshot.logging().debugIntervalSeconds());
         assertEquals(5, snapshot.logging().errorMaxSizeMegabytes());
         assertEquals(2, snapshot.logging().errorHistoryFiles());
+        assertEquals(1, snapshot.config().getRequiredFarmerLevel());
         assertEquals(List.of("WHEAT", "CARROT", "POTATO", "PUMPKIN"), snapshot.config().getItems());
     }
 
@@ -115,6 +116,7 @@ class ConfigurationMaintenanceTest {
                 withoutFarmer: 7
                 checkStock: true
                 defaultStatus: false
+                required-farmer-level: 0
                 customPerm: " "
                 items: [WHEAT, AIR, MELON, WHEAT, minecraft:future_crop]
                 stacked-crops:
@@ -163,6 +165,7 @@ class ConfigurationMaintenanceTest {
         assertFalse(repaired.getBoolean("status"));
         assertFalse(repaired.getBoolean("checkAllDirections"));
         assertEquals("farmer.autoharvest", repaired.getString("customPerm"));
+        assertEquals(1, repaired.getInt("required-farmer-level"));
         assertEquals(List.of("WHEAT", "MELON_SLICE", "FUTURE_CROP"), repaired.getStringList("items"));
         assertTrue(repaired.getBoolean("stacked-crops.enable"));
         assertEquals(List.of("BAMBOO", "KELP", "FUTURE_STACK_CROP"),
@@ -198,7 +201,7 @@ class ConfigurationMaintenanceTest {
         assertEquals(6, repaired.getInt("update-checker.check-interval-hours"));
         assertEquals(5, repaired.getInt("update-checker.connect-timeout-seconds"));
         assertEquals(8, repaired.getInt("update-checker.request-timeout-seconds"));
-        assertEquals(12, repaired.getInt("config-version"));
+        assertEquals(13, repaired.getInt("config-version"));
         assertEquals("preserved", repaired.getString("custom-extension"));
     }
 
@@ -224,7 +227,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(12, migrated.getInt("config-version"));
+        assertEquals(13, migrated.getInt("config-version"));
         assertEquals(47, snapshot.optimization().globalMaxJobsPerTick());
         assertTrue(snapshot.optimization().perHarvestDelayEnabled());
         assertEquals(HarvestPacingScope.REGION, snapshot.optimization().harvestScope());
@@ -306,7 +309,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(12, migrated.getInt("config-version"));
+        assertEquals(13, migrated.getInt("config-version"));
         assertEquals(3, snapshot.optimization().initialDelayTicks());
         assertEquals(2, snapshot.optimization().continuationDelayTicks());
         assertEquals(9, snapshot.optimization().maxJobsPerRun());
@@ -397,7 +400,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(12, migrated.getInt("config-version"));
+        assertEquals(13, migrated.getInt("config-version"));
         assertFalse(snapshot.logging().debugEnabled());
         assertEquals(450, snapshot.logging().debugIntervalSeconds());
         assertFalse(migrated.contains("optimize-module.advanced.logging"));
@@ -426,7 +429,7 @@ class ConfigurationMaintenanceTest {
 
         assertTrue(snapshot.repaired());
         assertEquals(1, backupCount());
-        assertEquals(12, migrated.getInt("config-version"));
+        assertEquals(13, migrated.getInt("config-version"));
         assertFalse(snapshot.tracking().scanEntireLoadedFarmerArea());
         assertFalse(snapshot.tracking().cropPriorityEnabled());
         assertEquals(5, snapshot.tracking().prioritizedScansBeforeNormal());
@@ -477,7 +480,10 @@ class ConfigurationMaintenanceTest {
         assertTrue(Files.readString(firstBackup(languageDirectory)).contains("not-base64!"));
         assertEquals("&aEnabled", language.getString("enabled"));
         assertEquals("h", language.getString("moduleGui.icon.guiInterface"));
-        assertEquals("&eAuto Harvester", language.getString("moduleGui.icon.name"));
+        assertEquals("&eAuto Harvest", language.getString("moduleGui.icon.name"));
+        assertEquals("Auto Harvest", language.getString("module-name"));
+        assertTrue(language.getString("level-required").contains("{required_level}"));
+        assertTrue(language.getString("level-required").contains("{current_level}"));
         assertTrue(language.getString("update.available").contains("{module}"));
         assertTrue(language.getString("update.available").contains("{url}"));
         assertTrue(language.isList("moduleGui.icon.lore"));
